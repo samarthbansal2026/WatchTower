@@ -1,0 +1,17 @@
+{
+  "name": "watchtower",
+  "version": "0.1.0",
+  "description": "Live test harness for public APIs",
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file=.env tests/run-all.js",
+    "test": "node --env-file=.env tests/run-all.js",
+    "intel": "node --env-file=.env stores/store-intel.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

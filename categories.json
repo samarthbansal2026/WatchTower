@@ -1,0 +1,205 @@
+{
+  "_comment": "APIs useful for forecasting demand, foot traffic, and operations for a dollar-store chain (e.g. Dollar Tree). Each entry under forecast_7d lists only the endpoints that return FORWARD-LOOKING data for the next ~7 days.",
+
+  "forecast_7d": {
+
+    "weather": {
+      "_comment": "Weather directly drives impulse buys (umbrellas, fans, hand warmers, rain ponchos) and foot traffic volume. Cold/rain suppresses visits; heat waves spike beverage/fan sales.",
+      "apis": [
+        {
+          "service": "noaa-nws",
+          "endpoint": "GET https://api.weather.gov/points/{lat},{lon}  →  GET {forecastUrl}",
+          "test_file": "tests/noaa/nws.js",
+          "auth": "none (User-Agent header required)",
+          "horizon": "7 days, twice-daily periods",
+          "signals": ["temperature", "precipitation", "shortForecast (e.g. 'Thunderstorms')"],
+          "dollar_store_use": "Per-store 7-day forecast: stock rain gear before a storm, push fans before a heat wave, anticipate traffic dips on rain days."
+        },
+        {
+          "service": "open-meteo-forecast",
+          "endpoint": "GET https://api.open-meteo.com/v1/forecast?latitude=&longitude=&hourly=temperature_2m,precipitation,weather_code&daily=...",
+          "test_file": "tests/open-meteo/forecast.js",
+          "auth": "none",
+          "horizon": "16 days hourly + daily",
+          "signals": ["temperature_2m", "precipitation_sum", "weather_code"],
+          "dollar_store_use": "Higher resolution than NWS (hourly). Use weather_code to categorize storm severity. Good for same-week staffing and reorder triggers."
+        },
+        {
+          "service": "open-meteo-ensemble",
+          "endpoint": "GET https://ensemble-api.open-meteo.com/v1/ensemble?latitude=&longitude=&hourly=temperature_2m,precipitation&models=icon_seamless",
+          "test_file": "tests/open-meteo/ensemble.js",
+          "auth": "none",
+          "horizon": "7.5 days, 40 probabilistic members",
+          "signals": ["temperature_2m (40 members)", "precipitation (40 members)"],
+          "dollar_store_use": "Probabilistic forecast: if 35 of 40 members show rain Saturday, stock umbrellas now. Reduces over/under-stocking vs. single-model forecasts."
+        },
+        {
+          "service": "open-meteo-air-quality",
+          "endpoint": "GET https://air-quality-api.open-meteo.com/v1/air-quality?latitude=&longitude=&hourly=pm2_5,us_aqi",
+          "test_file": "tests/open-meteo/air-quality.js",
+          "auth": "none",
+          "horizon": "5 days hourly",
+          "signals": ["us_aqi", "pm2_5", "pm10"],
+          "dollar_store_use": "High AQI days → spike in mask, air-freshener, and allergy-relief sales. Pre-position inventory near stores in wildfire-prone regions."
+        },
+        {
+          "service": "noaa-nws-alerts",
+          "endpoint": "GET https://api.weather.gov/alerts/active?point={lat},{lon}",
+          "test_file": "tests/noaa/nws-alerts.js",
+          "auth": "none (User-Agent required)",
+          "horizon": "Active now + imminent (hours to 2 days)",
+          "signals": ["event type (e.g. 'Winter Storm Warning')", "severity", "urgency"],
+          "dollar_store_use": "Trigger emergency stock alerts: a 'Winter Storm Warning' should auto-flag stores to front-load salt, shovels, candles, batteries."
+        },
+        {
+          "service": "open-meteo-flood",
+          "endpoint": "GET https://flood-api.open-meteo.com/v1/flood?latitude=&longitude=&daily=river_discharge&forecast_days=16",
+          "test_file": "tests/open-meteo/flood.js",
+          "auth": "none",
+          "horizon": "16 days daily",
+          "signals": ["river_discharge (m³/s)"],
+          "dollar_store_use": "Stores near rivers: flood risk forecast drives demand for buckets, mops, tarps, bottled water. Also affects store accessibility."
+        }
+      ]
+    },
+
+    "events": {
+      "_comment": "Events cause predictable foot-traffic surges near stores. A stadium game 2 miles from a Dollar Tree spikes snack/drink/party-supply sales for 3–4 hours before and after.",
+      "apis": [
+        {
+          "service": "ticketmaster",
+          "endpoint": "GET https://app.ticketmaster.com/discovery/v2/events.json?latlong={lat},{lon}&radius=10&unit=miles&startDateTime={now}&endDateTime={+7d}&sort=date,asc&apikey={key}",
+          "test_file": "tests/ticketmaster/events.js",
+          "auth": "API key (TICKETMASTER_CONSUMER_KEY)",
+          "horizon": "Any future date range (filter with startDateTime / endDateTime)",
+          "signals": ["event name", "date/time", "venue", "genre/classification", "expected attendance"],
+          "dollar_store_use": "The broadest event database. Query by lat/lon radius around each store. Concerts, festivals, comedy shows → party supplies, balloons, snacks. Filter by genre to pre-stock accordingly."
+        },
+        {
+          "service": "mlb-schedule",
+          "endpoint": "GET https://statsapi.mlb.com/api/v1/schedule?sportId=1&season=2026&gameType=R&startDate={YYYY-MM-DD}&endDate={YYYY-MM-DD}",
+          "test_file": "tests/sports-schedules/mlb.js",
+          "auth": "none",
+          "horizon": "Full season (filter by date range)",
+          "signals": ["gameDate", "venue.name", "home team", "away team"],
+          "dollar_store_use": "Baseball has 162 games/season — near-daily traffic surges near ballparks. Stock team-color party supplies, snacks, drinks on game days. Venue field enables per-store matching."
+        },
+        {
+          "service": "nhl-schedule",
+          "endpoint": "GET https://api-web.nhle.com/v1/club-schedule-season/{TEAM}/{season}  OR  GET /v1/schedule/{YYYY-MM-DD}",
+          "test_file": "tests/sports-schedules/nhl.js",
+          "auth": "none",
+          "horizon": "Full season per team",
+          "signals": ["startTimeUTC", "venue.default", "homeTeam", "awayTeam", "gameState"],
+          "dollar_store_use": "Covers all 32 NHL teams. Stores near arenas (TD Garden, Madison Square Garden) see pre-game/post-game spikes. Fetch /v1/schedule/{date} for league-wide next-7-day view."
+        },
+        {
+          "service": "nfl-balldontlie",
+          "endpoint": "GET https://api.balldontlie.io/nfl/v1/games?seasons[]=2025&per_page=100",
+          "test_file": "tests/sports-schedules/nfl.js",
+          "auth": "API key (BALLDONTLIE_API_KEY, raw — not Bearer)",
+          "horizon": "Full season",
+          "signals": ["date", "venue", "week", "home_team", "visitor_team", "status"],
+          "dollar_store_use": "NFL Sundays are the highest single-day traffic spikes near stadiums. 17-week season. Stores near NFL venues should pre-stock party supplies, disposable plates, snacks Thursday–Sunday."
+        },
+        {
+          "service": "nba-balldontlie",
+          "endpoint": "GET https://api.balldontlie.io/v1/games?seasons[]=2025&per_page=100",
+          "test_file": "tests/sports-schedules/nba.js",
+          "auth": "API key (BALLDONTLIE_API_KEY)",
+          "horizon": "Full season (cursor-paginated)",
+          "signals": ["datetime", "home_team.city", "visitor_team", "status"],
+          "dollar_store_use": "82-game season Oct–Apr. Note: no venue field — infer by home_team.city. Use ESPN basketball/nba scoreboard if arena name is needed for geo-matching."
+        },
+        {
+          "service": "mls-espn",
+          "endpoint": "GET https://site.api.espn.com/apis/site/v2/sports/soccer/usa.1/scoreboard?dates={YYYYMMDD}-{YYYYMMDD}&limit=400",
+          "test_file": "tests/sports-schedules/mls.js",
+          "auth": "none",
+          "horizon": "Any date range (filter via dates param)",
+          "signals": ["date", "venue.fullName", "home team", "away team", "status"],
+          "dollar_store_use": "MLS season Feb–Nov. Full venue field makes geo-matching easy. Works for querying next 7 days specifically. Free, no auth."
+        },
+        {
+          "service": "predicthq",
+          "endpoint": "GET https://api.predicthq.com/v1/events/?category=academic&country=US&start.gte={date}&start.lte={+7d}&phq_label=graduation",
+          "test_file": "tests/uni-calendars/predicthq.js",
+          "auth": "Bearer token (PREDICTHQ_TOKEN)",
+          "horizon": "Any future date range",
+          "signals": ["title", "start_local", "phq_attendance", "phq_labels", "geo.address.locality"],
+          "dollar_store_use": "Graduation weekends drive massive dollar-store runs: balloons, banners, plastic cups, tablecloths. PredictHQ covers 1000+ US graduation events with attendance estimates and city-level geo."
+        }
+      ]
+    },
+
+    "mobility": {
+      "_comment": "Road conditions affect whether customers can reach the store AND whether delivery trucks can resupply on schedule.",
+      "apis": [
+        {
+          "service": "wzdx-state-feeds",
+          "endpoint": "GET {state-specific WZDx GeoJSON feed URL}  (MD, NY, WA, DE, LA, ID covered)",
+          "test_file": "tests/dot511/wzdx-states.js",
+          "auth": "none",
+          "horizon": "Active + scheduled work zones (start/end dates in GeoJSON properties)",
+          "signals": ["road name", "geometry (line)", "start_date", "end_date", "impact (lane closures)"],
+          "dollar_store_use": "If the road fronting a store has a 3-week lane closure starting Thursday, expect 20–40% traffic drop. Flag stores with imminent work zones for adjusted staffing and delivery rerouting."
+        },
+        {
+          "service": "wsdot",
+          "endpoint": "GET https://wsdot.com/Traffic/api/HighwayAlerts/HighwayAlertsREST.svc/GetAlertsAsJson?AccessCode={key}",
+          "test_file": "tests/dot511/wsdot.js",
+          "auth": "API key (WSDOT_ACCESS_CODE)",
+          "horizon": "Active and scheduled alerts (hours to days)",
+          "signals": ["alerts (closures, incidents)", "camera feeds", "traffic flow", "mountain pass conditions"],
+          "dollar_store_use": "Washington state stores: mountain pass closures affect supply chains. Real-time traffic flow data can signal unexpected traffic surges (detours routing customers past your store)."
+        }
+      ]
+    },
+
+    "economics": {
+      "_comment": "These APIs are largely LAGGING (historical releases). Included here for context. Not useful for 7-day operational decisions but valuable for quarterly planning.",
+      "apis": [
+        {
+          "service": "fred-observations",
+          "endpoint": "GET https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={key}&sort_order=desc&limit=3",
+          "test_file": "tests/fred/observations.js",
+          "auth": "API key (FRED_API_KEY)",
+          "horizon": "LAGGING — most recent release, not a forecast",
+          "signals": ["CPI (CPIAUCSL)", "Consumer Sentiment (UMCSENT)", "WTI Oil (DCOILWTICO)", "Unemployment (UNRATE)"],
+          "dollar_store_use": "CPI and Consumer Sentiment are leading signals for dollar-store demand trends: high inflation + low sentiment = more customers trading down to dollar stores. Use for monthly/quarterly inventory planning, not 7-day ops.",
+          "forward_looking": false
+        }
+      ]
+    }
+  },
+
+  "_not_forward_looking": {
+    "_comment": "These services have no 7-day forecast capability. Useful for store site selection, demographics, and historical analysis but NOT for weekly operational decisions.",
+    "services": [
+      {
+        "service": "census-acs",
+        "use": "Store site selection: median income, population density, poverty rate by census tract. Run once per store or annually."
+      },
+      {
+        "service": "sec-edgar",
+        "use": "Monitor Dollar Tree competitors (Dollar General, Five Below) 10-Q/10-K filings for store expansion plans, margin trends, and supply chain disclosures."
+      },
+      {
+        "service": "overpass-osm",
+        "use": "Current map data: find competitor locations, bus stops, parking lots near each store. Static — query on demand, not on a 7-day schedule."
+      },
+      {
+        "service": "noaa-cdo-historical",
+        "use": "Pull historical weather by station for training ML demand models. Not forward-looking."
+      },
+      {
+        "service": "open-meteo-historical",
+        "use": "ERA5 reanalysis back to 1940. Use to correlate past weather with past sales for model training."
+      },
+      {
+        "service": "open-meteo-climate",
+        "use": "CMIP6 projections to 2050. Long-range store mix planning (AC accessories in warming regions)."
+      }
+    ]
+  }
+}
