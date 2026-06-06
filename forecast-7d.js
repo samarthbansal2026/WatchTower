@@ -348,54 +348,78 @@ async function fetchTicketmaster() {
   const source = 'ticketmaster';
   const key = process.env.TICKETMASTER_CONSUMER_KEY;
   if (!key) return skipped(source, 'TICKETMASTER_CONSUMER_KEY not set');
+
+  // One call per day so each day gets its own 100-event budget.
+  // A single 7-day call sorted by date gets exhausted by today's dense schedule in busy metros.
+  function dayBounds(offsetDays) {
+    const d = new Date(now);
+    d.setDate(d.getDate() + offsetDays);
+    const base = d.toISOString().slice(0, 10);
+    return { start: base + 'T00:00:00Z', end: base + 'T23:59:59Z', date: base };
+  }
+
+  function mapEvent(e) {
+    const venue = e._embedded?.venues?.[0];
+    const cls   = e.classifications?.[0];
+    return {
+      id:             e.id,
+      name:           e.name,
+      date:           e.dates?.start?.localDate,
+      time:           e.dates?.start?.localTime,
+      datetime_utc:   e.dates?.start?.dateTime,
+      status:         e.dates?.status?.code,
+      venue_name:     venue?.name,
+      venue_address:  venue?.address?.line1,
+      venue_city:     venue?.city?.name,
+      venue_state:    venue?.state?.stateCode,
+      venue_lat:      venue?.location?.latitude,
+      venue_lon:      venue?.location?.longitude,
+      segment:        cls?.segment?.name,
+      genre:          cls?.genre?.name,
+      sub_genre:      cls?.subGenre?.name,
+      expected_attendance: e.pleaseNote ?? null,
+      url:            e.url,
+      price_range:    e.priceRanges?.[0]
+        ? { min: e.priceRanges[0].min, max: e.priceRanges[0].max, currency: e.priceRanges[0].currency }
+        : null,
+    };
+  }
+
   try {
-    const params = new URLSearchParams({
-      countryCode:      'US',
-      latlong:          `${LAT},${LON}`,
-      radius:           '25',
-      unit:             'miles',
-      startDateTime:    TODAY_TM,
-      endDateTime:      PLUS7_TM,
-      size:             '100',
-      sort:             'date,asc',
-      apikey:           key,
-    });
-    const r = await timedFetch(
-      `https://app.ticketmaster.com/discovery/v2/events.json?${params}`,
-      { timeoutMs: 45000 }
-    );
-    if (!r.ok) return errored(source, `HTTP ${r.status}`);
-    const events = r.body?._embedded?.events ?? [];
+    const days = Array.from({ length: 7 }, (_, i) => dayBounds(i));
+
+    // Fetch all 7 days in parallel
+    const results = await Promise.all(days.map(async ({ start, end, date }) => {
+      const params = new URLSearchParams({
+        countryCode:   'US',
+        latlong:       `${LAT},${LON}`,
+        radius:        '25',
+        unit:          'miles',
+        startDateTime: start,
+        endDateTime:   end,
+        size:          '100',
+        sort:          'date,asc',
+        apikey:        key,
+      });
+      const r = await timedFetch(
+        `https://app.ticketmaster.com/discovery/v2/events.json?${params}`,
+        { timeoutMs: 45000 }
+      );
+      if (!r.ok) return { date, total: 0, events: [], error: `HTTP ${r.status}` };
+      return {
+        date,
+        total:  r.body?.page?.totalElements ?? 0,
+        events: (r.body?._embedded?.events ?? []).map(mapEvent),
+      };
+    }));
+
+    const allEvents = results.flatMap(d => d.events);
+    const totalAvailable = results.reduce((sum, d) => sum + d.total, 0);
 
     return wrap(source, {
-      total_available: r.body?.page?.totalElements ?? 0,
+      total_available: totalAvailable,
       radius_miles: 25,
-      events: events.map(e => {
-        const venue = e._embedded?.venues?.[0];
-        const cls   = e.classifications?.[0];
-        return {
-          id:             e.id,
-          name:           e.name,
-          date:           e.dates?.start?.localDate,
-          time:           e.dates?.start?.localTime,
-          datetime_utc:   e.dates?.start?.dateTime,
-          status:         e.dates?.status?.code,
-          venue_name:     venue?.name,
-          venue_address:  venue?.address?.line1,
-          venue_city:     venue?.city?.name,
-          venue_state:    venue?.state?.stateCode,
-          venue_lat:      venue?.location?.latitude,
-          venue_lon:      venue?.location?.longitude,
-          segment:        cls?.segment?.name,       // Music, Sports, Arts, etc.
-          genre:          cls?.genre?.name,
-          sub_genre:      cls?.subGenre?.name,
-          expected_attendance: e.pleaseNote ?? null,
-          url:            e.url,
-          price_range:    e.priceRanges?.[0]
-            ? { min: e.priceRanges[0].min, max: e.priceRanges[0].max, currency: e.priceRanges[0].currency }
-            : null,
-        };
-      }),
+      events: allEvents,
     });
   } catch (e) {
     return errored(source, e);
@@ -652,157 +676,144 @@ async function fetchPredictHq() {
 // MOBILITY
 // ---------------------------------------------------------------------------
 
-async function fetchWzdxStates() {
-  const source = 'wzdx-state-feeds';
-  const FEEDS = [
-    { state: 'MD', url: 'https://filter.ritis.org/wzdx_v4.1/mdot.geojson' },
-    { state: 'NY', url: 'https://511ny.org/api/wzdx' },
-    { state: 'WA', url: 'https://wzdx.wsdot.wa.gov/api/v4/WorkZoneFeed' },
-    { state: 'DE', url: 'https://wzdx.e-dot.com/del_dot_feed_wzdx_v4.1.geojson' },
-    { state: 'LA', url: 'https://wzdx.e-dot.com/la_dot_d_feed_wzdx_v4.1.geojson' },
-    { state: 'ID', url: 'https://511.idaho.gov/api/wzdx' },
-  ];
-
-  const UA_WZDX = 'watchtower-wzdx/1.0 (work.samarthbansal@gmail.com)';
-
-  const byState = {};
-  let anyOk = false;
-
-  await Promise.all(FEEDS.map(async feed => {
-    try {
-      const r = await timedFetch(feed.url, {
-        timeoutMs: 20000,
-        headers: { 'User-Agent': UA_WZDX },
-      });
-      if (!r.ok) { byState[feed.state] = { ok: false, status: r.status }; return; }
-
-      let body = r.body;
-      if (typeof body === 'string') { try { body = JSON.parse(body); } catch { /* */ } }
-      if (body?.type !== 'FeatureCollection' || !Array.isArray(body.features)) {
-        byState[feed.state] = { ok: false, error: 'not a FeatureCollection' }; return;
-      }
-
-      // Filter to work zones that are active or starting within the 7-day window
-      const relevant = body.features.filter(f => {
-        const props = f.properties;
-        const start = props?.start_date ?? props?.core_details?.start_date;
-        const end   = props?.end_date   ?? props?.core_details?.end_date;
-        if (!end) return true;                     // no end date = assume ongoing
-        if (end < TODAY) return false;             // already ended
-        if (start && start > PLUS7) return false;  // starts after our window
-        return true;
-      });
-
-      anyOk = true;
-      byState[feed.state] = {
-        ok:           true,
-        total_active: relevant.length,
-        feed_version: body.feed_info?.version ?? body.road_event_feed_info?.version,
-        publisher:    body.feed_info?.publisher ?? body.road_event_feed_info?.publisher,
-        work_zones:   relevant.map(f => {
-          const p = f.properties;
-          const cd = p?.core_details ?? p;
-          return {
-            road_name:          cd.road_names?.[0] ?? p.road_name,
-            direction:          cd.direction,
-            start_date:         cd.start_date ?? p.start_date,
-            end_date:           cd.end_date   ?? p.end_date,
-            start_type:         cd.start_type,
-            description:        cd.description ?? p.short_description,
-            types_of_work:      p.types_of_work?.map(t => t.type_name) ?? [],
-            lane_restrictions:  p.restrictions?.map(r => r.restriction_type) ?? [],
-            geometry_type:      f.geometry?.type,
-            // Bounding box of geometry (first/last coordinate pair) for quick geo-matching
-            geometry_start:     f.geometry?.coordinates?.[0],
-            geometry_end:       f.geometry?.coordinates?.at?.(-1),
-          };
-        }),
-      };
-    } catch (err) {
-      byState[feed.state] = { ok: false, error: String(err) };
-    }
-  }));
-
-  if (!anyOk) return errored(source, 'all state WZDx feeds failed');
-  return wrap(source, { states_queried: FEEDS.map(f => f.state), by_state: byState });
+// Haversine distance between two lat/lon points — returns miles.
+function haversineMiles(lat1, lon1, lat2, lon2) {
+  const R = 3958.8;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.asin(Math.sqrt(a));
 }
 
-async function fetchWsdot() {
-  const source = 'wsdot';
-  const key = process.env.WSDOT_ACCESS_CODE;
-  if (!key) return skipped(source, 'WSDOT_ACCESS_CODE not set');
-  try {
-    const BASE = 'https://wsdot.com/Traffic/api';
+// Rough bounding-box state detection for the states we have WZDx feeds for.
+// Returns the 2-letter code or null if the store is in an uncovered state.
+function detectState(lat, lon) {
+  if (lat >= 40.5  && lat <= 45.1 && lon >= -79.8  && lon <= -71.8) return 'NY';
+  if (lat >= 37.9  && lat <= 39.7 && lon >= -79.5  && lon <= -75.0) return 'MD';
+  if (lat >= 45.5  && lat <= 49.1 && lon >= -124.8 && lon <= -116.9) return 'WA';
+  if (lat >= 38.4  && lat <= 39.9 && lon >= -75.8  && lon <= -74.9) return 'DE';
+  if (lat >= 28.9  && lat <= 33.1 && lon >= -94.1  && lon <= -88.8) return 'LA';
+  if (lat >= 41.9  && lat <= 49.1 && lon >= -117.3 && lon <= -111.0) return 'ID';
+  return null;
+}
 
-    function parseBody(body) {
-      if (typeof body === 'string') { try { return JSON.parse(body); } catch { return body; } }
-      return body;
+const WZDX_FEEDS = {
+  NY: 'https://511ny.org/api/wzdx',
+  MD: 'https://filter.ritis.org/wzdx_v4.1/mdot.geojson',
+  WA: 'https://wzdx.wsdot.wa.gov/api/v4/WorkZoneFeed',
+  DE: 'https://wzdx.e-dot.com/del_dot_feed_wzdx_v4.1.geojson',
+  LA: 'https://wzdx.e-dot.com/la_dot_d_feed_wzdx_v4.1.geojson',
+  ID: 'https://511.idaho.gov/api/wzdx',
+};
+
+const WZDX_RADIUS_MILES = 5;
+
+async function fetchWzdxStates() {
+  const source = 'wzdx-state-feeds';
+
+  const state = detectState(LAT, LON);
+  if (!state) {
+    return wrap(source, {
+      note: `No WZDx feed available for the state containing (${LAT}, ${LON}). Covered states: ${Object.keys(WZDX_FEEDS).join(', ')}`,
+      work_zones: [],
+    });
+  }
+
+  const feedUrl = WZDX_FEEDS[state];
+  try {
+    const r = await timedFetch(feedUrl, {
+      timeoutMs: 20000,
+      headers: { 'User-Agent': 'watchtower-wzdx/1.0 (work.samarthbansal@gmail.com)' },
+    });
+    if (!r.ok) return errored(source, `${state} feed HTTP ${r.status}`);
+
+    let body = r.body;
+    if (typeof body === 'string') { try { body = JSON.parse(body); } catch { /* */ } }
+    if (body?.type !== 'FeatureCollection' || !Array.isArray(body.features)) {
+      return errored(source, `${state} feed: not a FeatureCollection`);
     }
 
-    const [alertsRes, passesRes] = await Promise.all([
-      timedFetch(`${BASE}/HighwayAlerts/HighwayAlertsREST.svc/GetAlertsAsJson?AccessCode=${key}`, { timeoutMs: 20000 }),
-      timedFetch(`${BASE}/MountainPassConditions/MountainPassConditionsREST.svc/GetMountainPassConditionsAsJson?AccessCode=${key}`, { timeoutMs: 20000 }),
-    ]);
-
-    if (!alertsRes.ok) return errored(source, `alerts HTTP ${alertsRes.status}`);
-    if (!passesRes.ok) return errored(source, `passes HTTP ${passesRes.status}`);
-
-    const alerts = parseBody(alertsRes.body);
-    const passes = parseBody(passesRes.body);
-
-    // Filter alerts to those active within the next 7 days
-    const relevantAlerts = Array.isArray(alerts) ? alerts.filter(a => {
-      const end = a.LastUpdatedTime ?? a.EndRoadwayLocation ?? null;
-      // WSDOT dates come as /Date(ms)/ strings
-      const parseWsdotDate = s => {
-        if (!s) return null;
-        const m = String(s).match(/\d+/);
-        return m ? new Date(parseInt(m[0])) : null;
-      };
-      const endDate = parseWsdotDate(a.EndTime ?? a.LastUpdatedTime);
-      if (endDate && endDate < now) return false;
+    // Step 1: filter to 7-day window
+    const inWindow = body.features.filter(f => {
+      const props = f.properties;
+      const start = props?.start_date ?? props?.core_details?.start_date;
+      const end   = props?.end_date   ?? props?.core_details?.end_date;
+      if (!end) return true;
+      if (end < TODAY) return false;
+      if (start && start > PLUS7) return false;
       return true;
-    }) : [];
+    });
+
+    // Step 2: filter to within WZDX_RADIUS_MILES of the store using Haversine.
+    // GeoJSON coordinates are [lon, lat]. We check geometry_start and geometry_end;
+    // if either endpoint is within range the work zone is considered nearby.
+    function coordPairs(feature) {
+      const coords = feature.geometry?.coordinates;
+      if (!coords || !coords.length) return [];
+      const type = feature.geometry?.type;
+      if (type === 'LineString') return [coords[0], coords[coords.length - 1]];
+      if (type === 'MultiPoint') return coords;          // [[lon,lat], [lon,lat], …]
+      if (type === 'Point') return [coords];             // [lon, lat]
+      return Array.isArray(coords[0]) ? [coords[0], coords[coords.length - 1]] : [coords];
+    }
+
+    function isNearby(feature) {
+      for (const [fLon, fLat] of coordPairs(feature)) {
+        if (typeof fLat !== 'number' || typeof fLon !== 'number') continue;
+        if (haversineMiles(LAT, LON, fLat, fLon) <= WZDX_RADIUS_MILES) return true;
+      }
+      return false;
+    }
+
+    const nearby = inWindow.filter(isNearby);
 
     return wrap(source, {
-      alerts: {
-        count: relevantAlerts.length,
-        items: relevantAlerts.map(a => ({
-          alert_id:     a.AlertID,
-          category:     a.EventCategory,
-          priority:     a.Priority,
-          headline:     a.HeadlineDescription,
-          extended:     a.ExtendedDescription,
-          start_time:   a.StartTime,
-          end_time:     a.EndTime,
-          region:       a.Region,
-          county:       a.County,
-          start_road:   a.StartRoadwayLocation?.Description,
-          end_road:     a.EndRoadwayLocation?.Description,
-        })),
-      },
-      mountain_passes: {
-        count: Array.isArray(passes) ? passes.length : 0,
-        items: Array.isArray(passes) ? passes.map(p => ({
-          name:             p.MountainPassName,
-          elevation_ft:     p.ElevationInFeet,
-          temperature_f:    p.TemperatureInFahrenheit,
-          weather_condition: p.WeatherCondition,
-          road_condition:   p.RoadCondition,
-          travel_advisory:  p.TravelAdvisoryActive,
-          restriction_one:  p.RestrictionOne?.TravelDirection + ': ' + p.RestrictionOne?.RestrictionText,
-          restriction_two:  p.RestrictionTwo?.TravelDirection + ': ' + p.RestrictionTwo?.RestrictionText,
-          forecast:         p.Forecast?.map(f => ({
-            day_time:    f.Day,
-            forecast:    f.ForecastText,
-          })) ?? [],
-        })) : [],
-      },
+      state,
+      feed_url:     feedUrl,
+      feed_version: body.feed_info?.version ?? body.road_event_feed_info?.version,
+      publisher:    body.feed_info?.publisher ?? body.road_event_feed_info?.publisher,
+      radius_miles: WZDX_RADIUS_MILES,
+      total_in_state_window: inWindow.length,
+      total_near_store:      nearby.length,
+      work_zones: nearby.map(f => {
+        const p  = f.properties;
+        const cd = p?.core_details ?? p;
+        const pairs = coordPairs(f);
+        return {
+          road_name:         cd.road_names?.[0] ?? p.road_name,
+          direction:         cd.direction,
+          start_date:        cd.start_date ?? p.start_date,
+          end_date:          cd.end_date   ?? p.end_date,
+          description:       cd.description ?? p.short_description,
+          types_of_work:     p.types_of_work?.map(t => t.type_name) ?? [],
+          lane_restrictions: p.restrictions?.map(r => r.restriction_type) ?? [],
+          geometry_type:     f.geometry?.type,
+          geometry_start:    pairs[0] ?? null,
+          geometry_end:      pairs[pairs.length - 1] ?? null,
+          distance_miles:    (() => {
+            let min = Infinity;
+            for (const [fLon, fLat] of pairs) {
+              if (typeof fLat !== 'number') continue;
+              const d = haversineMiles(LAT, LON, fLat, fLon);
+              if (d < min) min = d;
+            }
+            return min === Infinity ? null : parseFloat(min.toFixed(2));
+          })(),
+        };
+      }).sort((a, b) => (a.distance_miles ?? 99) - (b.distance_miles ?? 99)),
     });
   } catch (e) {
     return errored(source, e);
   }
 }
+
+// WSDOT commented out — WA-state only, not relevant for most store locations.
+// Uncomment fetchWsdot() and restore it to Promise.all + output.mobility when needed.
+/*
+async function fetchWsdot() { ... }
+*/
 
 // ---------------------------------------------------------------------------
 // Orchestrate — run all APIs in parallel per category
@@ -816,7 +827,7 @@ async function main() {
     // events
     ticketmaster, mlb, nhl, nfl, nba, mls, predicthq,
     // mobility
-    wzdxStates, wsdot,
+    wzdxStates,
   ] = await Promise.all([
     fetchNwsForecast(),
     fetchNwsAlerts(),
@@ -832,7 +843,6 @@ async function main() {
     fetchMls(),
     fetchPredictHq(),
     fetchWzdxStates(),
-    fetchWsdot(),
   ]);
 
   const output = {
@@ -844,7 +854,6 @@ async function main() {
         TICKETMASTER_CONSUMER_KEY: !!process.env.TICKETMASTER_CONSUMER_KEY,
         BALLDONTLIE_API_KEY:       !!process.env.BALLDONTLIE_API_KEY,
         PREDICTHQ_TOKEN:           !!process.env.PREDICTHQ_TOKEN,
-        WSDOT_ACCESS_CODE:         !!process.env.WSDOT_ACCESS_CODE,
       },
     },
 
@@ -870,9 +879,8 @@ async function main() {
     },
 
     mobility: {
-      // Road closures affect store accessibility and delivery truck routing
-      wzdx_state_feeds: wzdxStates,  // active work zones in MD, NY, WA, DE, LA, ID
-      wsdot:            wsdot,       // WA-state highway alerts + mountain pass conditions
+      // Road closures within 5 miles of the store — affects access and delivery routing
+      wzdx_state_feeds: wzdxStates,
     },
   };
 
@@ -894,10 +902,13 @@ async function main() {
   console.error(`[forecast-7d] raw  → ${rawPath}`);
 
   // Clean log — trimmed per user spec:
-  //   1. Remove open_meteo_forecast.hourly (too granular; daily is enough)
-  //   2. Remove open_meteo_ensemble.daily_probabilistic (redundant with daily forecast)
-  //   3. Sports: replace full games[] with date → game_count map
-  //   4. PredictHQ: replace event arrays with label → total_count
+  //   1. Remove open_meteo_forecast.hourly
+  //   2. Remove open_meteo_ensemble.daily_probabilistic
+  //   3. Remove hourly nested inside each air_quality daily entry
+  //   4. Drop open_meteo_flood if no abnormality (max discharge < 2× mean across all days)
+  //   5. Sports: replace games[] with date → game_count map
+  //   6. PredictHQ: replace event arrays with label → total_count
+  //   7. Ticketmaster: deduplicate by event name, then summarize by segment → genre → count
   function clean(raw) {
     const c = JSON.parse(JSON.stringify(raw)); // deep clone
 
@@ -911,7 +922,26 @@ async function main() {
       delete c.weather.open_meteo_ensemble.data.daily_probabilistic;
     }
 
-    // 3. Collapse each sport's games[] → { date_game_count: { "YYYY-MM-DD": N } }
+    // 3. Strip hourly from each air quality daily entry
+    if (c.weather.open_meteo_air_quality?.data?.daily) {
+      for (const day of c.weather.open_meteo_air_quality.data.daily) {
+        delete day.hourly;
+      }
+    }
+
+    // 4. Drop flood if no abnormality: flag only when any day's max > 2× overall mean discharge
+    const floodDays = c.weather.open_meteo_flood?.data?.daily ?? [];
+    if (floodDays.length > 0) {
+      const discharges = floodDays.map(d => d.river_discharge_mean_m3s).filter(v => v != null);
+      const overallMean = discharges.reduce((a, b) => a + b, 0) / discharges.length;
+      const peak = Math.max(...floodDays.map(d => d.river_discharge_max_m3s ?? 0));
+      const isAbnormal = peak > overallMean * 2;
+      if (!isAbnormal) {
+        c.weather.open_meteo_flood = { source: 'open-meteo-flood', ok: true, data: { note: 'No flood abnormality — omitted from clean log' } };
+      }
+    }
+
+    // 5. Collapse each sport's games[] → { date_game_count: { "YYYY-MM-DD": N } }
     const sports = ['mlb', 'nhl', 'nfl', 'nba', 'mls'];
     for (const sport of sports) {
       const s = c.events[sport];
@@ -924,13 +954,58 @@ async function main() {
       s.data = { game_count: s.data.game_count, date_game_count: map };
     }
 
-    // 4. PredictHQ: keep only label totals
+    // 6. PredictHQ: keep only label totals
     if (c.events.predicthq?.data) {
       const phq = c.events.predicthq.data;
       c.events.predicthq.data = Object.fromEntries(
         Object.entries(phq).map(([label, v]) => [label, v?.total ?? v])
       );
     }
+
+    // 7. Ticketmaster: dedupe by name, then summarize by segment → genre → sub_genre → count
+    if (c.events.ticketmaster?.data?.events) {
+      const events = c.events.ticketmaster.data.events;
+
+      // Filter to events actually occurring within the 7-day window (API returns flex/season
+      // tickets still on sale whose event date may be in the past)
+      const inRange = events.filter(e => e.date >= TODAY && e.date <= PLUS7);
+
+      // Deduplicate: keep first occurrence of each unique event name
+      const seen = new Set();
+      const deduped = inRange.filter(e => {
+        if (seen.has(e.name)) return false;
+        seen.add(e.name);
+        return true;
+      });
+
+      // Build segment → genre → sub_genre → count hierarchy
+      const bySegment = {};
+      for (const e of deduped) {
+        const seg = e.segment ?? 'Unknown';
+        const gen = e.genre ?? 'Unknown';
+        const sub = e.sub_genre ?? 'Unknown';
+        if (!bySegment[seg]) bySegment[seg] = {};
+        if (!bySegment[seg][gen]) bySegment[seg][gen] = {};
+        bySegment[seg][gen][sub] = (bySegment[seg][gen][sub] ?? 0) + 1;
+      }
+
+      // Date → count of unique events
+      const byDate = {};
+      for (const e of deduped) {
+        if (e.date) byDate[e.date] = (byDate[e.date] ?? 0) + 1;
+      }
+
+      c.events.ticketmaster.data = {
+        total_available:  c.events.ticketmaster.data.total_available,
+        unique_events:    deduped.length,
+        radius_miles:     c.events.ticketmaster.data.radius_miles,
+        by_date:          byDate,
+        by_segment:       bySegment,
+      };
+    }
+
+    // 8. Hide mobility — full work zone list stays in raw log only
+    delete c.mobility;
 
     return c;
   }

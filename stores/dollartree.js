@@ -103,28 +103,27 @@ const stores = [
    *   - Store may carry expanded cold/frozen given downtown office-lunch demand.
    */
   {
-    id: 'chicago-loop-state-st',
-    name: 'Dollar Tree — Chicago Loop, State St',
-    lat: 41.8812,
-    lng: -87.7054,
-    address: '3146 W Madison St, Chicago, IL 60612, United States',
-    state: 'IL',
-    format: '3.0 multi-price',
-    estimatedAnnualRevenue: '$3.5–5M',
-    revenueRankReason: 'High daytime worker + tourist volume; best urban revenue/rent ratio',
-    estimatedMargin: '~7–8% (better rent vs. NYC)',
-    footTrafficTier: 'top-0.5% of all US retail',
-    avgTicketVsFleet: '+30–50%',
-    rentPressure: 'MEDIUM-HIGH — ~$140/sq ft/yr',
-    // Eventbrite venue IDs within ~2 mi — verified live 2026-06-05
-    // West Side Chicago; United Center (Bulls/Blackhawks/concerts) is on the same
-    // W Madison St corridor, 1.6 mi east. West Garfield Park area has few other
-    // large Eventbrite-listed venues; major Loop venues (Navy Pier, Cultural Center)
-    // are ~3.5 mi east and not relevant to this store's customer base.
+    id: 'burlington-nc-church-st',
+    name: 'Dollar Tree — Burlington, Church Street Plaza',
+    lat: 36.0951,
+    lng: -79.4009,
+    address: '2120 N Church St, Burlington, NC 27217, United States',
+    state: 'NC',
+    format: '3.0 multi-price / XL footprint',
+    estimatedAnnualRevenue: '$4.5–6M',
+    revenueRankReason: 'World-record footprint; primary regional destination for bulk/seasonal stock',
+    estimatedMargin: '~10–12% (Low rural-market rent vs. massive volume)',
+    footTrafficTier: 'top-0.1% of fleet (regional destination status)',
+    avgTicketVsFleet: '+60–80%',
+    rentPressure: 'LOW — ~$12-15/sq ft/yr',
+    // Eventbrite/Local venue IDs within ~3 mi
     eventbriteVenueIds: [
-      { id: '297496337', name: 'United Center', distanceMi: 1.61 },
-    ],
+      { id: '1136-B', name: 'Enterprises Of Grace (Event Space)', distanceMi: 0.8 },
+      { id: '24555546', name: 'Alliance Convention Center', distanceMi: 1.58 },
+      { id: 'B-TOWN', name: 'Burlington Downtown Amphitheater', distanceMi: 2.1 },
+    ], 
   },
+
 
   /**
    * #3 — Orlando, FL — International Dr / Tourist Corridor  [EST. REVENUE: ~$3–4.5M/yr]
