@@ -64,12 +64,32 @@ const stores = [
     footTrafficTier: 'top-0.1% of all US retail',
     avgTicketVsFleet: '+40–60% (3.0 format + tourist/impulse mix)',
     rentPressure: 'HIGH — ~$300/sq ft/yr',
-    // Eventbrite venue IDs within ~1 mi — use GET /venues/{id}/events/ (no query params)
-    // IDs verified live 2026-06-05 via GET /events/{id}/?expand=venue
+    // Eventbrite venue IDs within 20 mi — discovered 2026-06-08 via web search + API resolution
+    // Use GET /venues/{id}/events/ (no query params accepted); filter client-side by date
     eventbriteVenueIds: [
-      { id: '297279382', name: '228 E 125th St — Harlem Community Center', distanceMi: 0.29 },
-      { id: '296267049', name: 'El Museo del Barrio',                       distanceMi: 0.82 },
-      { id: '296622737', name: 'Apollo Theater',                            distanceMi: 0.90 },
+      { id: '297163512', name: 'Adam Clayton Powell Jr State Office Building, New York, NY', distanceMi: 0.76 },
+      { id: '194080079', name: 'Movement Harlem, New York, NY',                              distanceMi: 0.88 },
+      { id: '233014369', name: 'Harbor NYC Rooftop, New York, NY',                           distanceMi: 3.97 },
+      { id: '297259262', name: 'Intrepid Museum, New York, NY',                              distanceMi: 4.06 },
+      { id: '297414490', name: 'Bryant Park, New York, NY',                                  distanceMi: 4.21 },
+      { id: '295072663', name: 'Sparrow\'s Nest Studio, New York, NY',                       distanceMi: 4.25 },
+      { id: '235460369', name: '520 8th Ave, New York, NY',                                  distanceMi: 4.26 },
+      { id: '133100419', name: 'Hyatt House Chelsea, New York, NY',                          distanceMi: 4.61 },
+      { id: '297949667', name: 'The Hudson, New York, NY',                                   distanceMi: 4.76 },
+      { id: '43834295',  name: 'Chelsea Market, New York, NY',                               distanceMi: 5.29 },
+      { id: '297773531', name: 'Gansevoort Plaza, New York, NY',                             distanceMi: 5.48 },
+      { id: '46949169',  name: 'Alligator Lounge, Brooklyn, NY',                             distanceMi: 5.98 },
+      { id: '297488202', name: 'Refuge, Brooklyn, NY',                                       distanceMi: 6.12 },
+      { id: '105995369', name: 'Sour Mouse NYC, New York, NY',                               distanceMi: 6.18 },
+      { id: '297940060', name: 'The Concord NYC, New York, NY',                              distanceMi: 6.24 },
+      { id: '297816496', name: 'Elsewhere, Brooklyn, NY',                                    distanceMi: 6.33 },
+      { id: '298018639', name: 'Elsewhere - The Hall, Brooklyn, NY',                         distanceMi: 6.33 },
+      { id: '296443418', name: 'MAMATACO, Brooklyn, NY',                                     distanceMi: 6.80 },
+      { id: '297636651', name: 'Hall des Lumières, New York, NY',                            distanceMi: 6.89 },
+      { id: '297450703', name: 'Secret Pour, Brooklyn, NY',                                  distanceMi: 7.37 },
+      { id: '246560673', name: 'Marriott, New York, NY',                                     distanceMi: 7.41 },
+      { id: '297930942', name: 'Littlefield, Brooklyn, NY',                                  distanceMi: 8.73 },
+      { id: '297385034', name: 'Governors Island Play Lawns, New York, NY',                  distanceMi: 8.84 },
     ],
   },
 
@@ -116,12 +136,18 @@ const stores = [
     footTrafficTier: 'top-0.1% of fleet (regional destination status)',
     avgTicketVsFleet: '+60–80%',
     rentPressure: 'LOW — ~$12-15/sq ft/yr',
-    // Eventbrite/Local venue IDs within ~3 mi
+    // Eventbrite venue IDs within 20 mi — discovered 2026-06-08 via web search + API resolution
     eventbriteVenueIds: [
-      { id: '1136-B', name: 'Enterprises Of Grace (Event Space)', distanceMi: 0.8 },
-      { id: '24555546', name: 'Alliance Convention Center', distanceMi: 1.58 },
-      { id: 'B-TOWN', name: 'Burlington Downtown Amphitheater', distanceMi: 2.1 },
-    ], 
+      { id: '295489859', name: 'Buster Sykes Agricultural Demonstration Farm and Forest, Mebane, NC', distanceMi: 0.30 },
+      { id: '296846597', name: 'Burlington Athletic Stadium, Burlington, NC',                          distanceMi: 0.77 },
+      { id: '297936498', name: '703 E Davis St, Burlington, NC',                                       distanceMi: 1.78 },
+      { id: '297974399', name: '127 E Front St, Burlington, NC',                                       distanceMi: 1.99 },
+      { id: '295643822', name: 'May Memorial Library, Burlington, NC',                                 distanceMi: 1.99 },
+      { id: '297798701', name: 'Kernodle Senior Center, Burlington, NC',                               distanceMi: 3.00 },
+      { id: '297563984', name: 'Krafty Sloth Taphouse, Burlington, NC',                               distanceMi: 4.30 },
+      { id: '297900206', name: 'The Krafty Sloth Taphouse, Burlington, NC',                           distanceMi: 4.30 },
+      { id: '295746464', name: 'Greensboro, Greensboro, NC',                                          distanceMi: 19.96 },
+    ],
   },
 
 
@@ -173,14 +199,26 @@ const stores = [
     avgTicketVsFleet: '+25–45% (multi-unit tourist purchases)',
     rentPressure: 'MEDIUM — ~$100/sq ft/yr',
     flStateAdvantage: 'No Florida state income tax; lower labor overhead vs. CA/NY',
-    // Eventbrite venue IDs along the I-Drive corridor — verified live 2026-06-05
-    // OCCC is the dominant signal (conventions 20k–200k attendees); hotel venues
-    // capture conferences and expos that spill onto I-Drive.
+    // Eventbrite venue IDs within 20 mi — discovered 2026-06-08 via web search + API resolution
     eventbriteVenueIds: [
-      { id: '296627032', name: 'Four Points by Sheraton — International Drive',       distanceMi: 0.42 },
-      { id: '296200424', name: 'Wyndham I-Drive Avanti Resort & Conference Center',   distanceMi: 1.08 },
-      { id: '265497123', name: 'Embassy Suites Hilton — International Drive Conv Ctr', distanceMi: 2.19 },
-      { id: '290011193', name: 'Orange County Convention Center (OCCC)',               distanceMi: 2.30 },
+      { id: '297386524', name: 'Dezerland Park Orlando, Orlando, FL',                                          distanceMi: 0.47 },
+      { id: '296005952', name: 'DoubleTree by Hilton at the Entrance to Universal Orlando, Orlando, FL',       distanceMi: 0.90 },
+      { id: '297729340', name: 'Fabletics, Orlando, FL',                                                       distanceMi: 1.97 },
+      { id: '297952548', name: 'lululemon, Orlando, FL',                                                       distanceMi: 1.97 },
+      { id: '297745107', name: 'Altira Pool + Lounge, Orlando, FL',                                            distanceMi: 6.86 },
+      { id: '297487271', name: 'Grand Bohemian Hotel Orlando, Autograph Collection, Orlando, FL',              distanceMi: 6.88 },
+      { id: '297841391', name: 'Grand Bohemian Orlando, Autograph Collection, Orlando, FL',                    distanceMi: 6.88 },
+      { id: '296501396', name: 'Celine Orlando, Orlando, FL',                                                  distanceMi: 7.05 },
+      { id: '297739101', name: 'The Patio, Orlando, FL',                                                       distanceMi: 7.06 },
+      { id: '297417070', name: 'Wall Street, Orlando, FL',                                                     distanceMi: 7.11 },
+      { id: '297375627', name: 'Lake Eola Park, Orlando, FL',                                                  distanceMi: 7.13 },
+      { id: '297899422', name: 'The Vanguard, Orlando, FL',                                                    distanceMi: 7.46 },
+      { id: '296715509', name: '578 N Orange Ave, Orlando, FL',                                                distanceMi: 7.46 },
+      { id: '297536079', name: 'Grape and the Grain Wine Bar, Orlando, FL',                                    distanceMi: 8.70 },
+      { id: '297131736', name: 'AdventHealth University, Orlando, FL',                                         distanceMi: 9.30 },
+      { id: '297883584', name: 'Orlando Fashion Square, Orlando, FL',                                          distanceMi: 9.34 },
+      { id: '297903461', name: 'Aroma Gastro Bar, Orlando, FL',                                                distanceMi: 11.21 },
+      { id: '297699047', name: '3800 S Econlockhatchee Trail, Orlando, FL',                                    distanceMi: 12.14 },
     ],
   },
 
