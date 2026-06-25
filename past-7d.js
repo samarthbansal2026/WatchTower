@@ -5,6 +5,7 @@
  *   - Weather: NWS station observations + Open-Meteo archive (ERA5/reanalysis)
  *   - Events:  Eventbrite venue-based (past events from known venue IDs), sports APIs
  *   - Mobility: WZDx feeds are live-only; omitted (noted in output)
+ *   - Competition: Flipp exposes current weekly circulars only — no historical archive
  *
  * Usage:
  *   node --env-file=.env past-7d.js [lat] [lon]
@@ -15,7 +16,7 @@
  */
 
 import { timedFetch } from './lib/test-runner.js';
-import stores from './stores/dollartree.js';
+import stores from './lib/stores.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -329,6 +330,7 @@ async function fetchEventbrite() {
   // Eventbrite has no geo search API — venue IDs were discovered via web scrape + API resolution.
   const nearest = stores
     .map(s => ({ ...s, distMi: haversineMiles(LAT, LON, s.lat, s.lng) }))
+    .filter(s => (s.eventbriteVenueIds ?? []).length > 0)
     .sort((a, b) => a.distMi - b.distMi)[0];
 
   const venueIds = (nearest?.eventbriteVenueIds ?? []).map(v => v.id);
@@ -382,7 +384,7 @@ async function fetchEventbrite() {
       store_name:        nearest.name,
       store_dist_mi:     parseFloat(nearest.distMi.toFixed(2)),
       venue_ids_queried: venueIds,
-      note: 'Eventbrite has no geo search — venue IDs sourced from stores/dollartree.js. /venues/{id}/events/ returns all events; filtered client-side to the past 7-day window.',
+      note: 'Eventbrite has no geo search — venue IDs sourced from lib/stores.js (nearest store with IDs). /venues/{id}/events/ returns all events; filtered client-side to the past 7-day window.',
       event_count: events.length,
       events,
     });
@@ -693,6 +695,13 @@ async function main() {
 
     mobility: {
       note: 'WZDx state feeds are live-only and do not provide historical work-zone data. Omitted from past-7d output.',
+    },
+
+    competition: {
+      flipp_competitor_circulars: skipped(
+        'flipp-competitor-circulars',
+        'Flipp Wishabi API exposes current weekly circulars only; no historical flyer archive for the lookback window',
+      ),
     },
   };
 

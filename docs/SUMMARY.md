@@ -1,6 +1,6 @@
 # Watchtower — API Master Summary
 
-All services covered as of 2026-06-05. For full details see each service's `INDEX.md` and per-API docs.
+All services covered as of 2026-06-24. For full details see each service's `INDEX.md` and per-API docs.
 
 ---
 
@@ -10,6 +10,7 @@ All services covered as of 2026-06-05. For full details see each service's `INDE
 - [Ticketmaster](#ticketmaster)
 - [DOT 511](#dot-511)
 - [SEC EDGAR](#sec-edgar)
+- [Flipp](#flipp)
 
 ---
 
@@ -353,3 +354,28 @@ Response: `{took, hits: {total, max_score, hits[]}}` — each hit has `_id` (`ac
 | `action=getcurrent` or `action=getcompany`, `type` (form type), `output=atom`, `count` (1–40), `CIK` (optional, 10-digit) | Atom 1.0 XML feed of recent filings — `<title>` (form, company, CIK), `<link>` (browse page), `<id>` (accession URN) |
 
 XML only — no JSON variant. Useful for monitoring new filings without polling `/submissions` per company.
+
+---
+
+## Flipp
+
+4 tested sub-APIs on the unofficial Wishabi JSON backend. No auth. See [`docs/flipp/INDEX.md`](flipp/INDEX.md).
+
+**Base URL**: `https://backflipp.wishabi.com/flipp`  
+**Auth**: None  
+
+| Endpoint | Params | Provides |
+|---|---|---|
+| `GET /flyers` | `locale`, `postal_code` | Active weekly circulars near a ZIP (merchant, validity, thumbnail) |
+| `GET /flyers/{flyer_id}` | — | All shoppable items on one circular (`brand`, `name`, `price`) |
+| `GET /items/search` | `postal_code`, `q` | Cross-flyer deal search (curated top deals when `q` empty) |
+| `GET /items/{item_id}` | — | Rich item detail (`description`, `ttm_url`, shipping/return links) |
+
+**Application outputs** (not in `logs/flipp/`):
+
+| Script | Field | Log file |
+|---|---|---|
+| `forecast-7d.js` | `competition.flipp_competitor_circulars` | `logs/{city}-{date}-raw.json` / `-clean.json` |
+| `store-intel.js` | `intel.flipp` | `logs/store-intel-latest.json` |
+
+**Gotchas**: Dollar Tree (merchant_id 2479) rarely publishes circulars. Walgreens items often lack `brand`. No historical archive — `past-7d.js` skips Flipp.

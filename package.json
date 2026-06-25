@@ -6,7 +6,11 @@
   "scripts": {
     "start": "node --env-file=.env tests/run-all.js",
     "test": "node --env-file=.env tests/run-all.js",
-    "intel": "node --env-file=.env stores/store-intel.js"
+    "intel": "node --env-file=.env stores/store-intel.js",
+    "intel:cavenders": "node --env-file=.env stores/store-intel.js dallas-cavenders-stemmons",
+    "forecast:cavenders": "node --env-file=.env forecast-7d.js 32.8043 -96.8378",
+    "past7:cavenders": "node --env-file=.env past-7d.js 32.8043 -96.8378",
+    "flipp": "node --env-file=.env forecast-7d.js 32.8043 -96.8378"
   },
   "dependencies": {
     "dotenv": "^16.4.5"

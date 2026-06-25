@@ -235,6 +235,7 @@ The harness exits 0 only if every test passes; CI-friendly.
 - **Open-Meteo marine silently returns empty arrays for land coordinates.** No error is returned; wave_height is just empty. Use an ocean point.
 - **Open-Meteo pollen variables** (air quality API) are populated for Europe only — nulls everywhere else with no error.
 - **Open-Meteo has a different subdomain per API family**: `api.`, `archive-api.`, `seasonal-api.`, `ensemble-api.`, `marine-api.`, `air-quality-api.`, `flood-api.`, `climate-api.`, `geocoding-api.` — easy to mix up.
+- **Flipp has no public API** — use `backflipp.wishabi.com/flipp` (reverse-engineered JSON). List flyers by ZIP, then `GET /flyers/{id}` for items with `brand` + `price`. Dollar Tree (merchant_id 2479) rarely has circulars; DG/Family Dollar do. Walgreens items often have `brand: null`. Merchant IDs are opaque — discover from `/flyers` response, don't hardcode without verifying. Application data belongs in `forecast-7d.js` (`competition.flipp_competitor_circulars`), not a separate bulk dump in `logs/flipp/`.
 
 ### Discovery patterns
 
@@ -271,5 +272,7 @@ The harness exits 0 only if every test passes; CI-friendly.
 | OpenStreetMap Overpass | `tests/overpass/` + `docs/overpass/` | 6 | ✓ All passing. Status/timestamp, nearby amenities, construction activity, transit proximity, attic historical diff, output formats (JSON/XML/CSV). No auth — User-Agent mandatory. See [docs/overpass/INDEX.md](docs/overpass/INDEX.md). |
 | US Census ACS | `tests/census-acs/` + `docs/census-acs/` | 1 | ✓ All passing. Two-step: geocoder (no auth) → ACS 5-year demographics by census tract (population, median income, poverty rate, housing units). See [docs/census-acs/INDEX.md](docs/census-acs/INDEX.md). |
 | Open-Meteo | `tests/open-meteo/` + `docs/open-meteo/` | 10 | ✓ All passing. Forecast (16-day), Historical (ERA5 to 1940), Seasonal (SEAS5, 50 members, 7 months), Ensemble (ICON 40-member), Marine, Air Quality, Flood (GloFAS), Satellite Radiation, Climate Change (CMIP6 1950–2050), Geocoding. All tier1, no auth. See [docs/open-meteo/INDEX.md](docs/open-meteo/INDEX.md). |
+| Flipp | `tests/flipp/` + `docs/flipp/` | 4 | ✓ All passing. Flyers by ZIP, flyer items (brand + price), item search, item detail. Unofficial Wishabi JSON — no auth. Integrated in `forecast-7d.js` (competition), `store-intel.js`, skipped in `past-7d.js`. See [docs/flipp/INDEX.md](docs/flipp/INDEX.md). |
+| Google Maps / Places | `tests/google-maps/` + `docs/google-maps/` | 2 | ✓ All passing. Text Search + Place Details for Cavender's Dallas (4.4★, 572 ratings). `reviews[]` empty until Enterprise+Atmosphere SKU — rating/count work. See [docs/google-maps/INDEX.md](docs/google-maps/INDEX.md). |
 
 When you finish a new service, add a row here and a fresh INDEX.md under its folder.

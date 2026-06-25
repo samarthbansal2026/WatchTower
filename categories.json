@@ -156,6 +156,21 @@
       ]
     },
 
+    "competition": {
+      "_comment": "What nearby competitors are promoting this week — national brand placements and price points from weekly circulars.",
+      "apis": [
+        {
+          "service": "flipp-competitor-circulars",
+          "endpoint": "GET https://backflipp.wishabi.com/flipp/flyers?postal_code={zip}  →  GET /flyers/{id}",
+          "test_file": "tests/flipp/flyer-items.js",
+          "auth": "none (unofficial Wishabi JSON backend)",
+          "horizon": "Current weekly circular validity dates (typically ~7 days)",
+          "signals": ["merchant", "brand", "item name", "price", "valid_to"],
+          "dollar_store_use": "Dollar General and Family Dollar weekly ads near the store ZIP show which national brands (Gain, Purina, etc.) are being pushed and at what price. Use for price-parity checks and promotional response. Dollar Tree rarely publishes on Flipp."
+        }
+      ]
+    },
+
     "economics": {
       "_comment": "These APIs are largely LAGGING (historical releases). Included here for context. Not useful for 7-day operational decisions but valuable for quarterly planning.",
       "apis": [

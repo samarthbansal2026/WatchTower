@@ -2,8 +2,8 @@
  * forecast-7d.js — 7-day forward-looking data aggregator for dollar-store demand planning.
  *
  * Calls every API in categories.json that has forward-looking data and returns a single
- * structured object organized by category → source. Missing API keys produce a { skipped }
- * entry rather than crashing the whole run.
+ * structured object organized by category → source (weather, events, mobility, competition).
+ * Missing API keys produce a { skipped } entry rather than crashing the whole run.
  *
  * Usage:
  *   node --env-file=.env forecast-7d.js [lat] [lon]
@@ -14,7 +14,8 @@
  */
 
 import { timedFetch } from './lib/test-runner.js';
-import stores from './stores/dollartree.js';
+import stores from './lib/stores.js';
+import { fetchCompetitorCircularsForLocation, cleanFlippCompetitorData } from './lib/flipp.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -389,6 +390,7 @@ async function fetchEventbrite() {
 
   const nearest = stores
     .map(s => ({ ...s, distMi: haversineMilesEB(LAT, LON, s.lat, s.lng) }))
+    .filter(s => (s.eventbriteVenueIds ?? []).length > 0)
     .sort((a, b) => a.distMi - b.distMi)[0];
 
   const venueIds = (nearest?.eventbriteVenueIds ?? []).map(v => v.id);
@@ -440,7 +442,7 @@ async function fetchEventbrite() {
       store_name:        nearest.name,
       store_dist_mi:     parseFloat(nearest.distMi.toFixed(2)),
       venue_ids_queried: venueIds,
-      note: 'Eventbrite has no geo search — venue IDs sourced from stores/dollartree.js. /venues/{id}/events/ returns all events; filtered client-side to the 7-day forecast window.',
+      note: 'Eventbrite has no geo search — venue IDs sourced from lib/stores.js (nearest store with IDs). /venues/{id}/events/ returns all events; filtered client-side to the 7-day forecast window.',
       event_count: events.length,
       events,
     });
@@ -921,6 +923,36 @@ async function fetchWsdot() { ... }
 */
 
 // ---------------------------------------------------------------------------
+// COMPETITION — nearby retailer weekly ads (Flipp / Wishabi)
+// ---------------------------------------------------------------------------
+
+async function fetchFlippCompetitorCirculars() {
+  const source = 'flipp-competitor-circulars';
+  try {
+    const data = await fetchCompetitorCircularsForLocation(
+      LAT, LON, stores, TODAY, PLUS7,
+    );
+    if (!data.ok) return skipped(source, data.error);
+    console.error(
+      `[forecast-7d] flipp: ZIP ${data.postalCode} via store "${data.nearestStore.id}" `
+      + `(${data.nearestStore.dist_mi} mi) — ${data.competitorFlyerCount} competitor circular(s) in window`,
+    );
+    return wrap(source, {
+      nearest_store: data.nearestStore,
+      postal_code:   data.postalCode,
+      refreshed_at:  data.refreshedAt,
+      market_flyer_count:      data.marketFlyerCount,
+      competitor_flyer_count:  data.competitorFlyerCount,
+      dollar_tree_has_flyer:     data.dollarTreeHasFlyer,
+      competitors: data.competitors,
+      top_brands:  data.top_brands,
+    });
+  } catch (e) {
+    return errored(source, e);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Orchestrate — run all APIs in parallel per category
 // ---------------------------------------------------------------------------
 async function main() {
@@ -933,6 +965,8 @@ async function main() {
     ticketmaster, eventbrite, mlb, nhl, nfl, nba, mls, predicthq,
     // mobility
     wzdxStates,
+    // competition
+    flippCirculars,
   ] = await Promise.all([
     fetchNwsForecast(),
     fetchNwsAlerts(),
@@ -949,6 +983,7 @@ async function main() {
     fetchMls(),
     fetchPredictHq(),
     fetchWzdxStates(),
+    fetchFlippCompetitorCirculars(),
   ]);
 
   const output = {
@@ -989,6 +1024,11 @@ async function main() {
     mobility: {
       // Road closures within 5 miles of the store — affects access and delivery routing
       wzdx_state_feeds: wzdxStates,
+    },
+
+    competition: {
+      // Dollar-channel weekly ads + national brand promos near the store ZIP
+      flipp_competitor_circulars: flippCirculars,
     },
   };
 
@@ -1138,6 +1178,13 @@ async function main() {
         by_date:     byDate,
         by_type:     byType,
       };
+    }
+
+    // 9. Flipp: drop per-item arrays; keep brand + competitor summaries
+    if (c.competition?.flipp_competitor_circulars?.data) {
+      c.competition.flipp_competitor_circulars.data = cleanFlippCompetitorData(
+        c.competition.flipp_competitor_circulars.data,
+      );
     }
 
     // 10. Hide mobility — full work zone list stays in raw log only

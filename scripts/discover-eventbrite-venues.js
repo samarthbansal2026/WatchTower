@@ -15,13 +15,17 @@
  */
 
 import { timedFetch } from '../lib/test-runner.js';
-import stores from '../stores/dollartree.js';
+import stores from '../lib/stores.js';
 
 const TOKEN        = process.env.EVENTBRITE_PRIVATE_TOKEN;
 const BASE         = 'https://www.eventbriteapi.com/v3';
 const RADIUS_MILES = 20;
-// Eventbrite web search — no auth, returns HTML with event IDs embedded in URLs
 const EB_WEB       = 'https://www.eventbrite.com';
+
+const filterId = process.argv.find(a => a.startsWith('--id='))?.slice(5)
+  ?? (process.argv.includes('--id') ? process.argv[process.argv.indexOf('--id') + 1] : null);
+
+const targetStores = filterId ? stores.filter(s => s.id === filterId) : stores;
 
 if (!TOKEN) {
   console.error('EVENTBRITE_PRIVATE_TOKEN not set');
@@ -47,16 +51,22 @@ function extractEventIds(html) {
   return [...ids];
 }
 
-// Fetch one page of Eventbrite web search results for a lat/lon
-async function scrapeEventIds(lat, lon, page = 1) {
-  const url = `${EB_WEB}/d/events/?location.latitude=${lat}&location.longitude=${lon}`
+// Fetch Dallas (or other city) listing pages — geo URL often 404s; city slug works.
+async function scrapeEventIds(lat, lon, page = 1, stateSlug = 'tx--dallas') {
+  const geoUrl = `${EB_WEB}/d/events/?location.latitude=${lat}&location.longitude=${lon}`
     + `&location.within=${RADIUS_MILES}mi&page=${page}`;
-  const r = await timedFetch(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; watchtower-discovery/1.0)' },
-    timeoutMs: 20000,
-  });
-  if (!r.ok || typeof r.body !== 'string') return [];
-  return extractEventIds(r.body);
+  const cityUrl = `${EB_WEB}/d/${stateSlug}/all-events/${page > 1 ? `?page=${page}` : ''}`;
+
+  for (const url of [geoUrl, cityUrl]) {
+    const r = await timedFetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; watchtower-discovery/1.0)' },
+      timeoutMs: 20000,
+    });
+    if (!r.ok || typeof r.body !== 'string') continue;
+    const ids = [...new Set([...r.body.matchAll(/\/e\/[a-z0-9-]+-(\d{10,})/gi)].map(m => m[1]))];
+    if (ids.length) return ids;
+  }
+  return [];
 }
 
 // Resolve an event ID to its venue details via API
@@ -98,10 +108,10 @@ async function resolveVenuesBatch(eventIds, concurrency = 5) {
 async function discoverForStore(store) {
   console.error(`\n[${store.id}] Scraping Eventbrite near (${store.lat}, ${store.lng})...`);
 
-  // Scrape pages 1–3 to get a good sample of event IDs
-  const pages = await Promise.all([1, 2, 3].map(p => scrapeEventIds(store.lat, store.lng, p)));
+  // Scrape pages 1–5 to get a good sample of event IDs
+  const pages = await Promise.all([1, 2, 3, 4, 5].map(p => scrapeEventIds(store.lat, store.lng, p, store.eventbriteCitySlug)));
   const allIds = [...new Set(pages.flat())];
-  console.error(`[${store.id}] Found ${allIds.length} unique event IDs across 3 pages`);
+  console.error(`[${store.id}] Found ${allIds.length} unique event IDs across 5 pages`);
 
   if (!allIds.length) {
     console.error(`[${store.id}] No event IDs found — check if Eventbrite returned HTML`);
@@ -124,16 +134,21 @@ async function discoverForStore(store) {
 }
 
 async function main() {
+  if (!targetStores.length) {
+    console.error(filterId ? `No store with id "${filterId}"` : 'No stores found');
+    process.exit(1);
+  }
+
   const results = {};
 
-  for (const store of stores) {
+  for (const store of targetStores) {
     const venues = await discoverForStore(store);
     results[store.id] = venues;
   }
 
   // Print paste-ready output for each store
-  console.log('\n\n========== RESULTS — paste into dollartree.js ==========\n');
-  for (const store of stores) {
+  console.log('\n\n========== RESULTS — paste into store file ==========\n');
+  for (const store of targetStores) {
     const venues = results[store.id];
     console.log(`// ${store.name}`);
     console.log(`eventbriteVenueIds: [`);

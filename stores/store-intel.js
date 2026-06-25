@@ -9,6 +9,7 @@
  *   NOAA NWS              7-day weather forecast  Stock umbrellas, fans, hot beverages
  *   Ticketmaster          Events within 5 mi      Pre-stock snacks; expect crowd surge
  *   DOT WZDx (state)      Active road work zones  Exterior signage; delivery reroute
+ *   Flipp (Wishabi)       Competitor weekly ads   Match/undercut DG & Family Dollar promos
  *
  * Usage:
  *   node --env-file=.env stores/store-intel.js
@@ -20,8 +21,16 @@
  * All other APIs (NWS, WZDx) are auth-free. User-Agent header is mandatory for NWS.
  */
 
-import stores from './dollartree.js';
+import stores from '../lib/stores.js';
 import { timedFetch } from '../lib/test-runner.js';
+import {
+  FLIPP_BASE,
+  DISCOUNT_COMPETITOR_IDS,
+  zipFromAddress,
+  fetchCircularsForZip,
+  summarizeCirculars,
+} from '../lib/flipp.js';
+import { fetchPlaceReviews, PLACES_BASE } from '../lib/google-places.js';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -453,13 +462,93 @@ async function fetchEventbriteIntel(store) {
   };
 }
 
+// ─── API: Flipp competitor circulars ─────────────────────────────────────────
+
+/** Nearby dollar-channel weekly ads + brand promotions (DG, Family Dollar, DT). */
+async function fetchFlippIntel(store) {
+  const t0 = Date.now();
+  const postalCode = zipFromAddress(store.address);
+  if (!postalCode) {
+    return { ok: false, ms: Date.now() - t0, error: 'no ZIP code in store address' };
+  }
+
+  const listUrl = `${FLIPP_BASE}/flyers?locale=en-us&postal_code=${postalCode}`;
+  log('FLIPP', 'GET', listUrl);
+
+  try {
+    const result = await fetchCircularsForZip(postalCode, {
+      merchantIds: DISCOUNT_COMPETITOR_IDS,
+      delayMs: 300,
+    });
+    logResponse('FLIPP', 200, result.ms);
+
+    const summary = summarizeCirculars(result);
+    return {
+      ok: true,
+      ms: Date.now() - t0,
+      endpoint: listUrl,
+      ...summary,
+    };
+  } catch (e) {
+    return { ok: false, ms: Date.now() - t0, error: e.message, endpoint: listUrl };
+  }
+}
+
+// ─── API: Google Places reviews ──────────────────────────────────────────────
+
+/** Store rating + up to 5 Google reviews (Places API New). */
+async function fetchGooglePlacesIntel(store) {
+  const t0 = Date.now();
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+
+  if (!apiKey) {
+    return { ok: false, skipped: true, reason: 'GOOGLE_PLACES_API_KEY not set' };
+  }
+  if (!store.googlePlaceId && !store.googlePlacesQuery) {
+    return { ok: false, skipped: true, reason: 'no googlePlaceId or googlePlacesQuery on store' };
+  }
+
+  const endpoint = store.googlePlaceId
+    ? `${PLACES_BASE}/places/${store.googlePlaceId}`
+    : `${PLACES_BASE}/places:searchText → place details`;
+
+  log('GPLACES', store.googlePlaceId ? 'GET' : 'POST+GET', endpoint);
+
+  try {
+    const data = await fetchPlaceReviews({
+      placeId: store.googlePlaceId,
+      textQuery: store.googlePlacesQuery,
+      lat: store.lat,
+      lng: store.lng,
+      apiKey,
+    });
+    logResponse('GPLACES', 200, data.ms);
+
+    return {
+      ok: true,
+      ms: Date.now() - t0,
+      endpoint: data.endpoint,
+      placeId: data.placeId,
+      name: data.name,
+      formattedAddress: data.formattedAddress,
+      rating: data.rating,
+      userRatingCount: data.userRatingCount,
+      googleMapsUri: data.googleMapsUri,
+      reviewCount: data.reviewCount,
+      reviews: data.reviews,
+    };
+  } catch (e) {
+    return { ok: false, ms: Date.now() - t0, error: e.message, endpoint };
+  }
+}
+
 // ─── Assessment ───────────────────────────────────────────────────────────────
 
 /**
  * Turns raw API results into plain-English store preparation actions.
  * Returns an array of { level: 'HIGH'|'MEDIUM'|'LOW', category, action } objects.
  */
-function buildAssessment(weather, events, zones, alerts, hurricane, ebrite) {
+function buildAssessment(weather, events, zones, alerts, hurricane, ebrite, flipp, gplaces) {
   const actions = [];
 
   // Active NWS alerts — highest priority; surface before forecast
@@ -567,6 +656,55 @@ function buildAssessment(weather, events, zones, alerts, hurricane, ebrite) {
     }
   }
 
+  // Competitor weekly circulars (Flipp)
+  if (flipp?.ok) {
+    if (!flipp.dollarTreeHasFlyer) {
+      actions.push({
+        level: 'LOW',
+        category: 'Circulars',
+        action: `No Dollar Tree weekly ad on Flipp for ZIP ${flipp.postalCode} — competitors may be capturing deal-seeking traffic`,
+      });
+    }
+    for (const c of flipp.competitors ?? []) {
+      if (c.merchantId === 2479) continue;
+      const brands = c.topBrands?.slice(0, 5).join(', ') || 'unbranded items only';
+      actions.push({
+        level: 'MEDIUM',
+        category: 'Circulars',
+        action: `${c.merchant} weekly ad active (${c.itemCount} items, valid to ${c.validTo?.slice(0, 10)}) — promoted brands: ${brands}`,
+      });
+    }
+    const top = flipp.topBrands?.[0];
+    if (top) {
+      actions.push({
+        level: 'LOW',
+        category: 'Circulars',
+        action: `Top promoted brand nearby: ${top.brand} (${top.offerCount} offers at ${top.merchants.join(', ')}) — check price parity on overlapping SKUs`,
+      });
+    }
+  }
+
+  // Google Places — reputation signal
+  if (gplaces?.ok) {
+    const { rating, userRatingCount, reviews } = gplaces;
+    if (rating != null && userRatingCount != null) {
+      const level = rating < 3.5 ? 'HIGH' : rating < 4.0 ? 'MEDIUM' : 'LOW';
+      actions.push({
+        level,
+        category: 'Reviews',
+        action: `Google rating ${rating}/5 from ${userRatingCount} reviews — ${rating < 4 ? 'monitor service quality; recent negative themes in reviews' : 'healthy reputation baseline'}`,
+      });
+    }
+    for (const rv of (reviews ?? []).filter(r => r.rating <= 2).slice(0, 2)) {
+      const snippet = (rv.text ?? '').slice(0, 120).replace(/\s+/g, ' ');
+      actions.push({
+        level: 'MEDIUM',
+        category: 'Reviews',
+        action: `Recent ${rv.rating}★ review (${rv.relativeTime ?? rv.publishTime ?? 'unknown date'}): "${snippet}${snippet.length >= 120 ? '…' : ''}"`,
+      });
+    }
+  }
+
   return actions;
 }
 
@@ -601,7 +739,7 @@ function logResponse(tag, status, ms) {
   console.log(`  ${C.dim}[${tag}]${C.reset} ${color}← ${status}${C.reset} ${C.dim}in ${ms}ms${C.reset}`);
 }
 
-function printReport(store, weather, events, zones, alerts, hurricane, ebrite) {
+function printReport(store, weather, events, zones, alerts, hurricane, ebrite, flipp, gplaces) {
   const line = '─'.repeat(68);
   console.log(`\n${C.bold}${C.bgCyan}${C.black}  STORE INTEL  ${C.reset}${C.bold}  ${store.name}${C.reset}`);
   console.log(`${C.dim}  ${store.address}  |  ${store.lat}, ${store.lng}  |  ${store.format}${C.reset}`);
@@ -687,6 +825,56 @@ function printReport(store, weather, events, zones, alerts, hurricane, ebrite) {
     }
   }
 
+  // ── Flipp competitor circulars ──
+  const flMs = flipp?.ok ? `${flipp.ms}ms` : 'error';
+  console.log(`\n${C.cyan}${C.bold}  📰  COMPETITOR CIRCULARS  ${C.reset}${C.dim}(Flipp · ZIP ${flipp?.postalCode ?? '?'} · ${flMs})${C.reset}`);
+  if (!flipp?.ok) {
+    console.log(`     ${C.red}✗ ${flipp?.error ?? 'failed'}${C.reset}`);
+  } else if (!flipp.competitors?.length) {
+    console.log(`     ${C.dim}No dollar-channel competitor circulars this week (${flipp.flyerCount} total flyers in market).${C.reset}`);
+  } else {
+    const dtTag = flipp.dollarTreeHasFlyer ? C.green : C.yellow;
+    console.log(`     ${dtTag}Dollar Tree circular: ${flipp.dollarTreeHasFlyer ? 'yes' : 'none on Flipp'}${C.reset}`);
+    for (const c of flipp.competitors) {
+      const brandHint = c.brandCount > 0
+        ? c.topBrands.slice(0, 4).join(', ') + (c.brandCount > 4 ? '…' : '')
+        : 'no brand tags';
+      console.log(`     • ${c.merchant.padEnd(16)}  ${String(c.itemCount).padStart(3)} items  valid to ${c.validTo?.slice(0, 10)}  ${C.dim}${brandHint}${C.reset}`);
+    }
+    if (flipp.topBrands?.length) {
+      const top = flipp.topBrands.slice(0, 5);
+      console.log(`     ${C.dim}Top brands: ${top.map(b => `${b.brand} (${b.offerCount})`).join(' · ')}${C.reset}`);
+    }
+  }
+
+  // ── Google Places reviews ──
+  const gpMs = gplaces?.ok ? `${gplaces.ms}ms` : gplaces?.skipped ? 'skipped' : 'error';
+  console.log(`\n${C.cyan}${C.bold}  ⭐  GOOGLE REVIEWS  ${C.reset}${C.dim}(Places API New · ${gpMs})${C.reset}`);
+  if (gplaces?.skipped) {
+    console.log(`     ${C.yellow}⚠  ${gplaces.reason}${C.reset}`);
+  } else if (!gplaces?.ok) {
+    console.log(`     ${C.red}✗ ${gplaces?.error ?? 'failed'}${C.reset}`);
+  } else {
+    const stars = gplaces.rating != null ? `${gplaces.rating}/5` : 'n/a';
+    const count = gplaces.userRatingCount != null ? `${gplaces.userRatingCount} ratings` : 'no count';
+    console.log(`     ${C.bold}${gplaces.name ?? store.name}${C.reset}  ${stars}  (${count})`);
+    if (gplaces.googleMapsUri) {
+      console.log(`     ${C.dim}${gplaces.googleMapsUri}${C.reset}`);
+    }
+    if (!gplaces.reviews?.length) {
+      console.log(`     ${C.dim}No review text returned (API returns max 5, relevance-sorted).${C.reset}`);
+    } else {
+      console.log(`     ${C.dim}Showing ${gplaces.reviews.length} review(s):${C.reset}`);
+      for (const rv of gplaces.reviews) {
+        const who = (rv.author ?? 'Anonymous').slice(0, 20).padEnd(20);
+        const starsRv = rv.rating != null ? `${rv.rating}★` : '?★';
+        const when = (rv.relativeTime ?? rv.publishTime?.slice(0, 10) ?? '').padEnd(12);
+        const text = (rv.text ?? '').replace(/\s+/g, ' ').slice(0, 55);
+        console.log(`     ${when}  ${starsRv.padEnd(3)}  ${who}  ${text}${(rv.text?.length ?? 0) > 55 ? '…' : ''}`);
+      }
+    }
+  }
+
   // ── Work zones ──
   const wzMs = zones.ok ? `${zones.ms}ms` : zones.skipped ? 'skipped' : 'error';
   console.log(`\n${C.cyan}${C.bold}  🚧  WORK ZONES  ${C.reset}${C.dim}(WZDx · ${store.state} feed · ${RADIUS_MI}mi · ${wzMs})${C.reset}`);
@@ -706,7 +894,7 @@ function printReport(store, weather, events, zones, alerts, hurricane, ebrite) {
   }
 
   // ── Assessment ──
-  const actions = buildAssessment(weather, events, zones, alerts, hurricane, ebrite);
+  const actions = buildAssessment(weather, events, zones, alerts, hurricane, ebrite, flipp, gplaces);
   console.log(`\n${C.bold}  ⚡  PREPARATION ASSESSMENT${C.reset}`);
   if (!actions.length) {
     console.log(`     ${C.green}✓ No significant impact factors this week. Normal operations.${C.reset}`);
@@ -733,13 +921,15 @@ function writeLog(runTs, results) {
       alerts:     'NOAA NWS — https://api.weather.gov/alerts/active?point={lat},{lng}',
       hurricane:  `NHC GTWO ArcGIS — ${NHC_GTWO}`,
       eventbrite: 'Eventbrite v3 — venue IDs from store config → GET /venues/{id}/events/ → /events/{id}/ticket_classes/ + /organizers/{id}/events/ + /series/{id}/events/',
+      flipp:      `Flipp Wishabi — ${FLIPP_BASE}/flyers?postal_code={zip} → /flyers/{id} for dollar-channel competitors (DG, Family Dollar, Dollar Tree)`,
+      googlePlaces: `Google Places API (New) — ${PLACES_BASE}/places:searchText → /places/{id} (reviews field, max 5)`,
     },
     run: {
       timestamp: runTs.toISOString(),
       radiusMi:  RADIUS_MI,
       eventDays: EVENT_DAYS,
     },
-    stores: results.map(({ store, weather, events, zones, alerts, hurricane, ebrite, assessment }) => ({
+    stores: results.map(({ store, weather, events, zones, alerts, hurricane, ebrite, flipp, gplaces, assessment }) => ({
       id:               store.id,
       name:             store.name,
       address:          store.address,
@@ -800,6 +990,34 @@ function writeLog(runTs, results) {
           totalUpcoming: ebrite?.totalUpcoming  ?? null,
           events:        ebrite?.events         ?? [],
         },
+        flipp: {
+          ok:                 flipp?.ok                 ?? false,
+          ms:                 flipp?.ms                 ?? null,
+          error:              flipp?.error              ?? null,
+          endpoint:           flipp?.endpoint           ?? null,
+          postalCode:         flipp?.postalCode         ?? null,
+          flyerCount:         flipp?.flyerCount         ?? null,
+          trackedFlyerCount:  flipp?.trackedFlyerCount  ?? null,
+          dollarTreeHasFlyer: flipp?.dollarTreeHasFlyer ?? null,
+          competitors:        flipp?.competitors        ?? [],
+          topBrands:          flipp?.topBrands          ?? [],
+        },
+        googlePlaces: {
+          ok:              gplaces?.ok              ?? false,
+          ms:              gplaces?.ms              ?? null,
+          skipped:         gplaces?.skipped         ?? false,
+          reason:          gplaces?.reason          ?? null,
+          error:           gplaces?.error           ?? null,
+          endpoint:        gplaces?.endpoint        ?? null,
+          placeId:         gplaces?.placeId         ?? null,
+          name:            gplaces?.name            ?? null,
+          formattedAddress: gplaces?.formattedAddress ?? null,
+          rating:          gplaces?.rating          ?? null,
+          userRatingCount: gplaces?.userRatingCount ?? null,
+          googleMapsUri:   gplaces?.googleMapsUri   ?? null,
+          reviewCount:     gplaces?.reviewCount     ?? null,
+          reviews:         gplaces?.reviews         ?? [],
+        },
       },
       assessment,
     })),
@@ -823,6 +1041,13 @@ async function main() {
   const runTs = new Date();
   const now   = runTs.toISOString().slice(0, 16).replace('T', ' ');
 
+  const filterId = process.argv[2] && !process.argv[2].startsWith('-') ? process.argv[2] : null;
+  const targetStores = filterId ? stores.filter(s => s.id === filterId) : stores;
+  if (filterId && !targetStores.length) {
+    console.error(`No store with id "${filterId}"`);
+    process.exit(1);
+  }
+
   console.log(`\n${C.bold}${C.cyan}`);
   console.log('╔═══════════════════════════════════════════════════════╗');
   console.log('║        Dollar Tree  —  Live Store Intelligence        ║');
@@ -830,7 +1055,7 @@ async function main() {
   console.log('║                                                       ║');
   console.log('║  Signals:  NWS Alerts · Weather · Events (TM)        ║');
   console.log('║            NHC Tropical · Road Work (WZDx)           ║');
-  console.log('║            Eventbrite (venue events + enrichment)    ║');
+  console.log('║            Eventbrite · Flipp · Google Places        ║');
   console.log('╚═══════════════════════════════════════════════════════╝');
   console.log(C.reset);
 
@@ -841,18 +1066,20 @@ async function main() {
 
   const allResults = [];
 
-  for (const store of stores) {
+  for (const store of targetStores) {
     console.log(`\n${C.dim}${'═'.repeat(68)}${C.reset}`);
     console.log(`${C.dim}  Fetching intel for: ${store.name}${C.reset}\n`);
 
-    // All 6 signals run in parallel — a failure in one does not block the others.
-    const [weatherResult, eventsResult, zonesResult, alertsResult, hurricaneResult, ebriteResult] = await Promise.allSettled([
+    // Signals run in parallel — a failure in one does not block the others.
+    const [weatherResult, eventsResult, zonesResult, alertsResult, hurricaneResult, ebriteResult, flippResult, gplacesResult] = await Promise.allSettled([
       fetchWeather(store),
       fetchEvents(store),
       fetchWorkZones(store, stateMap),
       fetchAlerts(store),
       fetchHurricaneRisk(store),
       fetchEventbriteIntel(store),
+      fetchFlippIntel(store),
+      fetchGooglePlacesIntel(store),
     ]);
 
     const unwrap = r => r.status === 'fulfilled' ? r.value : { ok: false, error: r.reason?.message ?? String(r.reason) };
@@ -862,10 +1089,12 @@ async function main() {
     const alerts     = unwrap(alertsResult);
     const hurricane  = unwrap(hurricaneResult);
     const ebrite     = unwrap(ebriteResult);
-    const assessment = buildAssessment(weather, events, zones, alerts, hurricane, ebrite);
+    const flipp      = unwrap(flippResult);
+    const gplaces    = unwrap(gplacesResult);
+    const assessment = buildAssessment(weather, events, zones, alerts, hurricane, ebrite, flipp, gplaces);
 
-    allResults.push({ store, weather, events, zones, alerts, hurricane, ebrite, assessment });
-    printReport(store, weather, events, zones, alerts, hurricane, ebrite);
+    allResults.push({ store, weather, events, zones, alerts, hurricane, ebrite, flipp, gplaces, assessment });
+    printReport(store, weather, events, zones, alerts, hurricane, ebrite, flipp, gplaces);
   }
 
   writeLog(runTs, allResults);
