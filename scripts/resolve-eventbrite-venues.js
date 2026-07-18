@@ -8,7 +8,7 @@
  */
 
 import { timedFetch } from '../lib/test-runner.js';
-import stores from '../stores/dollartree.js';
+import stores from '../stores/portfolio.js';
 
 const TOKEN        = process.env.EVENTBRITE_PRIVATE_TOKEN;
 const BASE         = 'https://www.eventbriteapi.com/v3';

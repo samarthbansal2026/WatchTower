@@ -1,7 +1,7 @@
 /**
  * discover-eventbrite-venues.js
  *
- * For each store in dollartree.js:
+ * For each store in stores/portfolio.js:
  *   1. Scrapes Eventbrite's web search for events near the store lat/lon
  *   2. Resolves each event to its venue via GET /events/{id}/?expand=venue
  *   3. Filters to venues within RADIUS_MILES using Haversine
@@ -10,12 +10,12 @@
  * Usage:
  *   node --env-file=.env scripts/discover-eventbrite-venues.js
  *
- * Output: prints the eventbriteVenueIds arrays ready to paste into dollartree.js.
- * Does NOT modify dollartree.js automatically — review and paste.
+ * Output: prints the eventbriteVenueIds arrays ready to paste into stores/portfolio.js.
+ * Does NOT modify stores/portfolio.js automatically — review and paste.
  */
 
 import { timedFetch } from '../lib/test-runner.js';
-import stores from '../stores/dollartree.js';
+import stores from '../stores/portfolio.js';
 
 const TOKEN        = process.env.EVENTBRITE_PRIVATE_TOKEN;
 const BASE         = 'https://www.eventbriteapi.com/v3';
@@ -132,7 +132,7 @@ async function main() {
   }
 
   // Print paste-ready output for each store
-  console.log('\n\n========== RESULTS — paste into dollartree.js ==========\n');
+  console.log('\n\n========== RESULTS — paste into stores/portfolio.js ==========\n');
   for (const store of stores) {
     const venues = results[store.id];
     console.log(`// ${store.name}`);

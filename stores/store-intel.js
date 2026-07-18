@@ -1,7 +1,7 @@
 /**
- * stores/store-intel.js — Dollar Tree Live Store Intelligence
+ * stores/store-intel.js — Live Store Intelligence
  *
- * Pulls real-time context from 3 public APIs for every store in dollartree.js
+ * Pulls real-time context from 3 public APIs for every store in portfolio.js
  * and produces an actionable preparation report per store.
  *
  *   API                   Signal                  Store action
@@ -20,7 +20,7 @@
  * All other APIs (NWS, WZDx) are auth-free. User-Agent header is mandatory for NWS.
  */
 
-import stores from './dollartree.js';
+import stores from './portfolio.js';
 import { timedFetch } from '../lib/test-runner.js';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
@@ -825,7 +825,7 @@ async function main() {
 
   console.log(`\n${C.bold}${C.cyan}`);
   console.log('╔═══════════════════════════════════════════════════════╗');
-  console.log('║        Dollar Tree  —  Live Store Intelligence        ║');
+  console.log('║              Live Store Intelligence                  ║');
   console.log(`║        ${now} UTC                          ║`);
   console.log('║                                                       ║');
   console.log('║  Signals:  NWS Alerts · Weather · Events (TM)        ║');

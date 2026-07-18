@@ -15,13 +15,13 @@
  */
 
 import { timedFetch } from './lib/test-runner.js';
-import stores from './stores/dollartree.js';
+import stores from './stores/portfolio.js';
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
-const LAT = parseFloat(process.argv[2] ?? process.env.LAT ?? '41.8781');
-const LON = parseFloat(process.argv[3] ?? process.env.LON ?? '-87.6298');
+let LAT = parseFloat(process.argv[2] ?? process.env.LAT ?? '41.8781');
+let LON = parseFloat(process.argv[3] ?? process.env.LON ?? '-87.6298');
 
 const now = new Date();
 const minus7 = new Date(now);
@@ -325,7 +325,7 @@ async function fetchEventbrite() {
   const token = process.env.EVENTBRITE_PRIVATE_TOKEN;
   if (!token) return skipped(source, 'EVENTBRITE_PRIVATE_TOKEN not set');
 
-  // Find the nearest store in dollartree.js and use its pre-curated venue IDs.
+  // Find the nearest store in stores/portfolio.js and use its pre-curated venue IDs.
   // Eventbrite has no geo search API — venue IDs were discovered via web scrape + API resolution.
   const nearest = stores
     .map(s => ({ ...s, distMi: haversineMiles(LAT, LON, s.lat, s.lng) }))
@@ -382,7 +382,7 @@ async function fetchEventbrite() {
       store_name:        nearest.name,
       store_dist_mi:     parseFloat(nearest.distMi.toFixed(2)),
       venue_ids_queried: venueIds,
-      note: 'Eventbrite has no geo search — venue IDs sourced from stores/dollartree.js. /venues/{id}/events/ returns all events; filtered client-side to the past 7-day window.',
+      note: 'Eventbrite has no geo search — venue IDs sourced from stores/portfolio.js. /venues/{id}/events/ returns all events; filtered client-side to the past 7-day window.',
       event_count: events.length,
       events,
     });
@@ -638,7 +638,7 @@ async function fetchPredictHq() {
 // ---------------------------------------------------------------------------
 // Orchestrate — run all APIs in parallel
 // ---------------------------------------------------------------------------
-async function main() {
+async function runPast() {
   console.error(`[past-7d] location=${LAT},${LON}  window=${MINUS7} → ${TODAY}`);
 
   const [
@@ -800,6 +800,20 @@ async function main() {
   console.error(`[past-7d] clean → ${cleanPath}`);
 
   console.log(JSON.stringify(cleaned, null, 2));
+}
+
+async function main() {
+  if (process.argv[2] || process.env.LAT) {
+    await runPast();
+  } else {
+    console.error(`\n[past-7d] No CLI args provided, running for ${stores.length} configured stores...`);
+    for (const store of stores) {
+      LAT = store.lat;
+      LON = store.lng;
+      console.error(`\n[past-7d] Running for ${store.name} (${LAT}, ${LON})`);
+      await runPast();
+    }
+  }
 }
 
 main().catch(err => { console.error(err); process.exit(1); });

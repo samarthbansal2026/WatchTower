@@ -46,6 +46,10 @@ A fresh API account is an **attendee account** by default. `owned_events` only w
 
 ---
 
+## India / location-scoped discovery (worked around, 2026-07-01)
+
+`GET /events/search/` was removed in Dec 2019 (see above), so there's no location-search call — but for India stores this can be worked around: scrape the **public discovery page** (`https://www.eventbrite.com/d/india--new-delhi/delhi/`, plain curl, no auth) for its server-rendered `schema.org/Event` JSON-LD to get real event IDs, then pull authoritative detail on each ID through the actual authenticated API (`GET /events/{id}/?expand=venue,ticket_availability`). Verified end-to-end for `delhi-croma-odeon-cp`: 18 events found on the discovery page citywide, 2 genuinely in Connaught Place within a 7-day window, both confirmed live via the real API with exact venue geo-coordinates (54 m from the store). Saved to `logs/croma-odeon-cp-eventbrite-2026-07-01-{raw,clean}.json`.
+
 ## How to get credentials
 
 1. Log in at https://www.eventbrite.com

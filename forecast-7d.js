@@ -14,13 +14,17 @@
  */
 
 import { timedFetch } from './lib/test-runner.js';
-import stores from './stores/dollartree.js';
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
-const LAT = parseFloat(process.argv[2] ?? process.env.LAT ?? '41.8781');
-const LON = parseFloat(process.argv[3] ?? process.env.LON ?? '-87.6298');
+let LAT = parseFloat(process.argv[2] ?? process.env.LAT ?? '41.8781');
+let LON = parseFloat(process.argv[3] ?? process.env.LON ?? '-87.6298');
+
+// ISO country code — only PredictHQ needs this (it filters by country, not radius).
+// Defaults to 'US'; the stores loop in main() overrides it per store.country.
+const COUNTRY_ISO = { India: 'IN' };
+let COUNTRY = process.env.COUNTRY ?? 'US';
 
 const now  = new Date();
 const plus7 = new Date(now);
@@ -149,7 +153,7 @@ async function fetchOpenMeteoForecast() {
       + `&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,weather_code,wind_speed_10m_max,sunrise,sunset`
       + `&temperature_unit=fahrenheit&wind_speed_unit=mph`
       + `&timezone=auto&forecast_days=7`;
-    const r = await timedFetch(url);
+    const r = await timedFetch(url, { timeoutMs: 45000 });
     if (!r.ok) return errored(source, `HTTP ${r.status}`);
 
     const d = r.body.daily;
@@ -345,110 +349,6 @@ async function fetchOpenMeteoFlood() {
 // EVENTS
 // ---------------------------------------------------------------------------
 
-const EB_CATEGORIES = {
-  '101': 'Business & Professional', '102': 'Science & Technology',
-  '103': 'Music',                   '104': 'Film, Media & Entertainment',
-  '105': 'Performing & Visual Arts','106': 'Fashion & Beauty',
-  '107': 'Health & Wellness',       '108': 'Sports & Fitness',
-  '109': 'Travel & Outdoor',        '110': 'Food & Drink',
-  '111': 'Charity & Causes',        '112': 'Government & Politics',
-  '113': 'Community & Culture',     '114': 'Religion & Spirituality',
-  '115': 'Family & Education',      '116': 'Seasonal & Holiday',
-  '117': 'Home & Lifestyle',        '118': 'Auto, Boat & Air',
-  '119': 'Hobbies & Special Interest','120': 'School Activities',
-  '199': 'Other',
-};
-
-const EB_FORMATS = {
-  '1':   'Conference',               '2':  'Seminar or Talk',
-  '3':   'Tradeshow or Expo',        '4':  'Convention',
-  '5':   'Festival or Fair',         '6':  'Concert or Performance',
-  '7':   'Screening',                '8':  'Dinner or Gala',
-  '9':   'Class, Training, or Workshop', '10': 'Meeting or Networking Event',
-  '11':  'Party or Social Gathering', '12': 'Rally',
-  '13':  'Tournament',               '14': 'Game or Competition',
-  '15':  'Race or Endurance Event',  '16': 'Tour',
-  '17':  'Attraction',               '18': 'Camp, Trip, or Retreat',
-  '19':  'Appearance or Signing',    '100': 'Other',
-};
-
-function haversineMilesEB(lat1, lon1, lat2, lon2) {
-  const R = 3958.8;
-  const toRad = d => d * Math.PI / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a = Math.sin(dLat / 2) ** 2
-    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.asin(Math.sqrt(a));
-}
-
-async function fetchEventbrite() {
-  const source = 'eventbrite';
-  const token = process.env.EVENTBRITE_PRIVATE_TOKEN;
-  if (!token) return skipped(source, 'EVENTBRITE_PRIVATE_TOKEN not set');
-
-  const nearest = stores
-    .map(s => ({ ...s, distMi: haversineMilesEB(LAT, LON, s.lat, s.lng) }))
-    .sort((a, b) => a.distMi - b.distMi)[0];
-
-  const venueIds = (nearest?.eventbriteVenueIds ?? []).map(v => v.id);
-  if (!venueIds.length) return skipped(source, `No venue IDs found for nearest store (${nearest?.id ?? 'none'})`);
-
-  console.error(`[forecast-7d] eventbrite: using ${venueIds.length} venues from store "${nearest.id}" (${nearest.distMi.toFixed(1)} mi away)`);
-
-  const BASE    = 'https://www.eventbriteapi.com/v3';
-  const headers = { Authorization: `Bearer ${token}` };
-
-  try {
-    const perVenue = await Promise.all(venueIds.map(async venueId => {
-      const r = await timedFetch(`${BASE}/venues/${venueId}/events/`, { headers, timeoutMs: 30000 });
-      if (!r.ok) return { venueId, error: `HTTP ${r.status}`, events: [] };
-      return { venueId, events: r.body?.events ?? [] };
-    }));
-
-    const seen = new Set();
-    const events = [];
-    for (const { venueId, events: evs, error } of perVenue) {
-      if (error) continue;
-      for (const e of evs) {
-        const date = (e.start?.utc ?? '').slice(0, 10);
-        if (date < TODAY || date > PLUS7) continue;
-        if (seen.has(e.id)) continue;
-        seen.add(e.id);
-        events.push({
-          id:          e.id,
-          name:        e.name?.text,
-          date,
-          start_local: e.start?.local,
-          start_utc:   e.start?.utc,
-          end_local:   e.end?.local,
-          status:      e.status,
-          url:         e.url,
-          venue_id:    venueId,
-          is_free:     e.is_free,
-          capacity:    e.capacity ?? null,
-          category:    EB_CATEGORIES[e.category_id] ?? null,
-          format:      EB_FORMATS[e.format_id] ?? null,
-        });
-      }
-    }
-
-    events.sort((a, b) => (a.start_utc ?? '').localeCompare(b.start_utc ?? ''));
-
-    return wrap(source, {
-      store_id:          nearest.id,
-      store_name:        nearest.name,
-      store_dist_mi:     parseFloat(nearest.distMi.toFixed(2)),
-      venue_ids_queried: venueIds,
-      note: 'Eventbrite has no geo search — venue IDs sourced from stores/dollartree.js. /venues/{id}/events/ returns all events; filtered client-side to the 7-day forecast window.',
-      event_count: events.length,
-      events,
-    });
-  } catch (e) {
-    return errored(source, e);
-  }
-}
-
 async function fetchTicketmaster() {
   const source = 'ticketmaster';
   const key = process.env.TICKETMASTER_CONSUMER_KEY;
@@ -496,7 +396,9 @@ async function fetchTicketmaster() {
     // Fetch all 7 days in parallel
     const results = await Promise.all(days.map(async ({ start, end, date }) => {
       const params = new URLSearchParams({
-        countryCode:   'US',
+        // No countryCode — latlong+radius already scopes results (verified: identical
+        // 442-event count for Chicago with/without it), and hardcoding 'US' silently
+        // zeroed out non-US stores (e.g. Croma/Delhi) even where Ticketmaster has coverage.
         latlong:       `${LAT},${LON}`,
         radius:        '25',
         unit:          'miles',
@@ -740,7 +642,7 @@ async function fetchPredictHq() {
     for (const label of LABELS) {
       const params = new URLSearchParams({
         category:    'academic',
-        country:     'US',
+        country:     COUNTRY,
         'start.gte': TODAY,
         'start.lte': PLUS7,
         phq_label:   label,
@@ -923,14 +825,14 @@ async function fetchWsdot() { ... }
 // ---------------------------------------------------------------------------
 // Orchestrate — run all APIs in parallel per category
 // ---------------------------------------------------------------------------
-async function main() {
+async function runForecast() {
   console.error(`[forecast-7d] location=${LAT},${LON}  window=${TODAY} → ${PLUS7}`);
 
   const [
     // weather
     nwsForecast, nwsAlerts, omForecast, omEnsemble, omAir, omFlood,
     // events
-    ticketmaster, eventbrite, mlb, nhl, nfl, nba, mls, predicthq,
+    ticketmaster, mlb, nhl, nfl, nba, mls, predicthq,
     // mobility
     wzdxStates,
   ] = await Promise.all([
@@ -941,7 +843,6 @@ async function main() {
     fetchOpenMeteoAirQuality(),
     fetchOpenMeteoFlood(),
     fetchTicketmaster(),
-    fetchEventbrite(),
     fetchMlb(),
     fetchNhl(),
     fetchNfl(),
@@ -958,7 +859,6 @@ async function main() {
       forecast_window: { from: TODAY, to: PLUS7 },
       env_keys_present: {
         TICKETMASTER_CONSUMER_KEY: !!process.env.TICKETMASTER_CONSUMER_KEY,
-        EVENTBRITE_PRIVATE_TOKEN:  !!process.env.EVENTBRITE_PRIVATE_TOKEN,
         BALLDONTLIE_API_KEY:       !!process.env.BALLDONTLIE_API_KEY,
         PREDICTHQ_TOKEN:           !!process.env.PREDICTHQ_TOKEN,
       },
@@ -977,7 +877,6 @@ async function main() {
     events: {
       // Predictable foot-traffic surges near venues → party supplies, snacks, drinks
       ticketmaster:  ticketmaster,   // concerts, festivals, comedy — 25-mile radius
-      eventbrite:    eventbrite,     // venue-based; category + format resolved
       mlb:           mlb,            // ~10 games/day league-wide during season
       nhl:           nhl,            // Oct–Jun; full venue field
       nfl:           nfl,            // Sundays; largest single-day spikes
@@ -1037,24 +936,16 @@ async function main() {
       }
     }
 
-    // 4. Summarise flood into per-day status + top-level worst-case status
+    // 4. Drop flood if no abnormality: flag only when any day's max > 2× overall mean discharge
     const floodDays = c.weather.open_meteo_flood?.data?.daily ?? [];
     if (floodDays.length > 0) {
-      const days = floodDays.map(d => {
-        const cur  = d.river_discharge_m3s;
-        const mean = d.river_discharge_mean_m3s;
-        const max  = d.river_discharge_max_m3s;
-        if (cur == null || mean == null) return { date: d.date, status: 'no_data' };
-        if (cur > mean * 2)   return { date: d.date, status: 'flooding',    reason: `current discharge ${(cur / mean).toFixed(1)}x above mean` };
-        if (max > mean * 2)   return { date: d.date, status: 'flood_risk',  reason: `max ensemble ${(max / mean).toFixed(1)}x above mean` };
-        return { date: d.date, status: 'normal' };
-      });
-      const priority = { flooding: 2, flood_risk: 1, normal: 0, no_data: -1 };
-      const worstStatus = days.reduce((best, d) => (priority[d.status] ?? 0) > (priority[best] ?? 0) ? d.status : best, 'normal');
-      c.weather.open_meteo_flood = {
-        source: 'open-meteo-flood', ok: true,
-        data: { status: worstStatus, days },
-      };
+      const discharges = floodDays.map(d => d.river_discharge_mean_m3s).filter(v => v != null);
+      const overallMean = discharges.reduce((a, b) => a + b, 0) / discharges.length;
+      const peak = Math.max(...floodDays.map(d => d.river_discharge_max_m3s ?? 0));
+      const isAbnormal = peak > overallMean * 2;
+      if (!isAbnormal) {
+        c.weather.open_meteo_flood = { source: 'open-meteo-flood', ok: true, data: { note: 'No flood abnormality — omitted from clean log' } };
+      }
     }
 
     // 5. Collapse each sport's games[] → { date_game_count: { "YYYY-MM-DD": N } }
@@ -1095,15 +986,11 @@ async function main() {
       });
 
       // Build segment → genre → sub_genre → count hierarchy
-      // Drop any level that is null, 'Unknown', 'Undefined', or 'Miscellaneous'
-      const JUNK = new Set(['Unknown', 'Undefined', 'Miscellaneous']);
       const bySegment = {};
       for (const e of deduped) {
-        const seg = e.segment;
-        const gen = e.genre;
-        const sub = e.sub_genre;
-        if (!seg || !gen || !sub) continue;
-        if (JUNK.has(seg) || JUNK.has(gen) || JUNK.has(sub)) continue;
+        const seg = e.segment ?? 'Unknown';
+        const gen = e.genre ?? 'Unknown';
+        const sub = e.sub_genre ?? 'Unknown';
         if (!bySegment[seg]) bySegment[seg] = {};
         if (!bySegment[seg][gen]) bySegment[seg][gen] = {};
         bySegment[seg][gen][sub] = (bySegment[seg][gen][sub] ?? 0) + 1;
@@ -1124,23 +1011,7 @@ async function main() {
       };
     }
 
-    // 8. Eventbrite: replace events[] with by_date + by_type (category | format combined)
-    if (c.events.eventbrite?.data?.events) {
-      const events = c.events.eventbrite.data.events;
-      const byDate = {}, byType = {};
-      for (const e of events) {
-        if (e.date) byDate[e.date] = (byDate[e.date] ?? 0) + 1;
-        const type = `${e.category ?? 'Unknown'} (${e.format ?? 'Unknown'})`;
-        byType[type] = (byType[type] ?? 0) + 1;
-      }
-      c.events.eventbrite.data = {
-        event_count: c.events.eventbrite.data.event_count,
-        by_date:     byDate,
-        by_type:     byType,
-      };
-    }
-
-    // 10. Hide mobility — full work zone list stays in raw log only
+    // 8. Hide mobility — full work zone list stays in raw log only
     delete c.mobility;
 
     return c;
@@ -1153,6 +1024,22 @@ async function main() {
 
   // Print the clean version to stdout
   console.log(JSON.stringify(cleaned, null, 2));
+}
+
+async function main() {
+  if (process.argv[2] || process.env.LAT) {
+    await runForecast();
+  } else {
+    const { default: stores } = await import('./stores/portfolio.js');
+    console.error(`\n[forecast-7d] No CLI args provided, running for ${stores.length} configured stores...`);
+    for (const store of stores) {
+      LAT = store.lat;
+      LON = store.lng;
+      COUNTRY = COUNTRY_ISO[store.country] ?? 'US';
+      console.error(`\n[forecast-7d] Running for ${store.name} (${LAT}, ${LON})`);
+      await runForecast();
+    }
+  }
 }
 
 main().catch(err => { console.error(err); process.exit(1); });
